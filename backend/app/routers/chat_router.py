@@ -45,14 +45,30 @@ class CompletionBody(BaseModel):
 
 
 def _get_handler(request: Request) -> ChatHandler:
-    """Get or create ChatHandler from app.state."""
+    """Get or create ChatHandler, dynamically discovering running model plugins."""
     state = request.app.state
-    if not hasattr(state, "chat_handler") or state.chat_handler is None:
-        # Read config from app.state.config_mgr
+    lifecycle_mgr = state.lifecycle_mgr
+
+    # Find first running model plugin
+    instances = lifecycle_mgr.list_instances()
+    if instances:
+        inst = instances[0]
+        host, port = inst["host"], inst["port"]
+        # Check if handler needs update
+        if (
+            not hasattr(state, "chat_handler")
+            or state.chat_handler is None
+            or state.chat_handler._host != host
+            or state.chat_handler._port != port
+        ):
+            state.chat_handler = ChatHandler(host=host, port=port)
+    elif not hasattr(state, "chat_handler") or state.chat_handler is None:
+        # No running plugin — use default from config
         cfg = state.config_mgr.get_global()
         host = cfg.get("default_host", "127.0.0.1")
         port = cfg.get("default_port_range", [8080, 8099])[0]
         state.chat_handler = ChatHandler(host=host, port=port)
+
     return state.chat_handler
 
 

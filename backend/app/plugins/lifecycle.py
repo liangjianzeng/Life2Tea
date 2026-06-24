@@ -120,11 +120,18 @@ class PluginLifecycleManager:
             if env:
                 proc_env.update(env)
 
+            # Open log file for both stdout and stderr
+            log_fh = open(log_file, "w", encoding="utf-8", errors="replace")
+            # Set cwd to the executable's directory so DLLs can be found
+            exe_path = command[0]
+            exe_dir = os.path.dirname(exe_path) or "."
+
             proc = subprocess.Popen(
                 command,
-                stdout=subprocess.DEVNULL,
-                stderr=open(log_file, "w"),
+                stdout=log_fh,
+                stderr=subprocess.STDOUT,
                 env=proc_env,
+                cwd=exe_dir,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             )
 
@@ -206,6 +213,8 @@ class PluginLifecycleManager:
         try:
             url = f"http://{inst.host}:{inst.port}{inst.health_endpoint}"
             resp = urllib.request.urlopen(url, timeout=3)
+            if resp.status == 200:
+                inst.status = PluginStatus.RUNNING
             return {"ok": resp.status == 200, "status": inst.status}
         except Exception as e:
             return {"ok": False, "error": str(e), "status": inst.status}
