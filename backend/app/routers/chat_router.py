@@ -9,30 +9,15 @@ Endpoints:
 """
 
 import json
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 
-from ..main import get_config_mgr, get_lifecycle_mgr
 from ..experts.chat_handler import ChatHandler
 
 
 router = APIRouter()
-
-# Global chat handler (reused across requests)
-_chat_handler: Optional[ChatHandler] = None
-_chat_lock = None  # initialized in startup
-
-
-def _get_handler() -> ChatHandler:
-    global _chat_handler
-    if _chat_handler is None:
-        cfg = get_config_mgr().get_global()
-        host = cfg.get("default_host", "127.0.0.1")
-        port = cfg.get("default_port_range", [8080, 8099])[0]
-        _chat_handler = ChatHandler(host=host, port=port)
-    return _chat_handler
 
 
 class ChatMessage(BaseModel):
@@ -59,9 +44,21 @@ class CompletionBody(BaseModel):
     temperature: float = 0.7
 
 
-@router.post("/completions")
-async def chat_completions(body: ChatCompletionBody):
-    handler = _get_handler()
+def _get_handler(request: Request) -> ChatHandler:
+    """Get or create ChatHandler from app.state."""
+    state = request.app.state
+    if not hasattr(state, "chat_handler") or state.chat_handler is None:
+        # Read config from app.state.config_mgr
+        cfg = state.config_mgr.get_global()
+        host = cfg.get("default_host", "127.0.0.1")
+        port = cfg.get("default_port_range", [8080, 8099])[0]
+        state.chat_handler = ChatHandler(host=host, port=port)
+    return state.chat_handler
+
+
+@router.post("/completions", summary="OpenAI-style chat completions")
+async def chat_completions(body: ChatCompletionBody, request: Request):
+    handler = _get_handler(request)
     messages = [m.dict() for m in body.messages]
 
     if body.stream:
@@ -93,9 +90,9 @@ async def chat_completions(body: ChatCompletionBody):
     return result
 
 
-@router.post("/completion")
-async def completion(body: CompletionBody):
-    handler = _get_handler()
+@router.post("/completion", summary="Text completion")
+async def completion(body: CompletionBody, request: Request):
+    handler = _get_handler(request)
     result = await handler.completion(
         prompt=body.prompt,
         stream=body.stream,
@@ -107,13 +104,13 @@ async def completion(body: CompletionBody):
     return result
 
 
-@router.get("/model-info")
-async def get_model_info():
-    handler = _get_handler()
+@router.get("/model-info", summary="Get loaded model info from running backend")
+async def get_model_info(request: Request):
+    handler = _get_handler(request)
     return await handler.get_model_info()
 
 
-@router.get("/health")
-async def chat_health():
-    handler = _get_handler()
+@router.get("/health", summary="Check if chat backend is reachable")
+async def chat_health(request: Request):
+    handler = _get_handler(request)
     return await handler.health_check()

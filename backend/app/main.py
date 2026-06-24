@@ -18,7 +18,6 @@ import os
 import sys
 import json
 import threading
-import asyncio
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional, List, Dict, Any
@@ -31,9 +30,10 @@ from pydantic import BaseModel, Field
 import uvicorn
 
 # ── Load project root ──────────────────────────────────
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# __file__ = backend/app/main.py → PROJECT_ROOT = 3 levels up
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, PROJECT_ROOT)
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(PROJECT_ROOT, "backend"))
 
 # ── Core managers ──────────────────────────────────────
 from app.core.config import ConfigManager
@@ -47,19 +47,55 @@ from app.plugins.backend_registry import (
     detect_backend, list_all_available_backends, scan_system_for_llama_servers
 )
 
-# ── Routers (lazy import to avoid circular) ───────────
-# Imported inside lifespan or route handlers to avoid circular imports
+
+# ── Helpers to get managers from app.state ───────────
+def _get_state(request: Request = None):
+    """Get the FastAPI app instance and its state."""
+    if request is not None:
+        return request.app.state
+    # Fallback: access app via the module-level `app` object
+    from app.main import app
+    return app.state
 
 
-# ── Global state ───────────────────────────────────────
-_config_mgr: Optional[ConfigManager] = None
-_logger_mgr: Optional[LoggerManager] = None
-_metrics_collector: Optional[MetricsCollector] = None
-_lifecycle_mgr: Optional[PluginLifecycleManager] = None
-_model_registry: Optional[ModelRegistry] = None
+def get_config_mgr(request: Request = None) -> ConfigManager:
+    state = _get_state(request)
+    mgr = getattr(state, "config_mgr", None)
+    if mgr is None:
+        raise RuntimeError("ConfigManager not initialized")
+    return mgr
 
-# Thread-safe lock for shared state
-_state_lock = threading.RLock()
+
+def get_logger_mgr(request: Request = None) -> LoggerManager:
+    state = _get_state(request)
+    mgr = getattr(state, "logger_mgr", None)
+    if mgr is None:
+        raise RuntimeError("LoggerManager not initialized")
+    return mgr
+
+
+def get_metrics_collector(request: Request = None) -> MetricsCollector:
+    state = _get_state(request)
+    mgr = getattr(state, "metrics_collector", None)
+    if mgr is None:
+        raise RuntimeError("MetricsCollector not initialized")
+    return mgr
+
+
+def get_lifecycle_mgr(request: Request = None) -> PluginLifecycleManager:
+    state = _get_state(request)
+    mgr = getattr(state, "lifecycle_mgr", None)
+    if mgr is None:
+        raise RuntimeError("PluginLifecycleManager not initialized")
+    return mgr
+
+
+def get_model_registry(request: Request = None) -> ModelRegistry:
+    state = _get_state(request)
+    mgr = getattr(state, "model_registry", None)
+    if mgr is None:
+        raise RuntimeError("ModelRegistry not initialized")
+    return mgr
 
 
 def _get_config_dir() -> str:
@@ -71,60 +107,66 @@ def _get_log_dir() -> str:
 
 
 def _get_models_dir() -> str:
-    cfg = _config_mgr.get_global() if _config_mgr else {}
-    return cfg.get("models_dir", "")
+    # Can't use get_config_mgr here because this is called during startup
+    # before the state is fully initialized. Read config file directly.
+    config_dir = _get_config_dir()
+    config_path = os.path.join(config_dir, "global.json")
+    if os.path.isfile(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            return cfg.get("models_dir", "")
+        except Exception:
+            pass
+    return ""
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan: startup → yield → shutdown."""
-    global _config_mgr, _logger_mgr, _metrics_collector
-    global _lifecycle_mgr, _model_registry
-
     # ── Startup ────────────────────────────────────────
     config_dir = _get_config_dir()
     log_dir = _get_log_dir()
     os.makedirs(config_dir, exist_ok=True)
     os.makedirs(log_dir, exist_ok=True)
 
-    _config_mgr = ConfigManager(config_dir)
+    # Initialize all managers and store them in app.state
+    app.state.config_mgr = ConfigManager(config_dir)
     init_logger_manager(log_dir, retention_days=30)
-    _logger_mgr = get_logger_manager()
-    _metrics_collector = MetricsCollector()
-    _lifecycle_mgr = PluginLifecycleManager(log_dir)
-    _model_registry = ModelRegistry(_get_models_dir())
+    app.state.logger_mgr = get_logger_manager()
+    app.state.metrics_collector = MetricsCollector()
+    app.state.lifecycle_mgr = PluginLifecycleManager(log_dir)
+    app.state.model_registry = ModelRegistry(_get_models_dir())
 
-    _logger_mgr.info("system", f"Life2Tea backend starting (project root: {PROJECT_ROOT})")
-    _logger_mgr.info("system", f"Config dir: {config_dir}")
-    _logger_mgr.info("system", f"Log dir: {log_dir}")
+    logger = app.state.logger_mgr
+    logger.info("system", f"Life2Tea backend starting (project root: {PROJECT_ROOT})")
+    logger.info("system", f"Config dir: {config_dir}")
+    logger.info("system", f"Log dir: {log_dir}")
 
     # Auto-scan models if dir is configured
     models_dir = _get_models_dir()
     if models_dir and os.path.isdir(models_dir):
-        _model_registry.scan()
-        _logger_mgr.info("system", f"Scanned models dir: {models_dir}, found {len(_model_registry.list_models())} models")
+        app.state.model_registry.scan()
+        logger.info("system", f"Scanned models dir: {models_dir}, found {len(app.state.model_registry.list_models())} models")
 
     # ── Include routers after managers are initialized ──
     from app.routers import config_router, models_router, plugins_router
     from app.routers import chat_router, metrics_router, logs_router
 
-    app.include_router(config_router.router, prefix="/api/config", tags=["Config"])
-    app.include_router(models_router.router, prefix="/api/models", tags=["Models"])
-    app.include_router(plugins_router.router, prefix="/api/plugins", tags=["Plugins"])
-    app.include_router(chat_router.router, prefix="/api/chat", tags=["Chat"])
-    app.include_router(metrics_router.router, prefix="/api/metrics", tags=["Metrics"])
-    app.include_router(logs_router.router, prefix="/api/logs", tags=["Logs"])
+    app.include_router(config_router, prefix="/api/config", tags=["Config"])
+    app.include_router(models_router, prefix="/api/models", tags=["Models"])
+    app.include_router(plugins_router, prefix="/api/plugins", tags=["Plugins"])
+    app.include_router(chat_router, prefix="/api/chat", tags=["Chat"])
+    app.include_router(metrics_router, prefix="/api/metrics", tags=["Metrics"])
+    app.include_router(logs_router, prefix="/api/logs", tags=["Logs"])
 
-    _logger_mgr.info("system", "Life2Tea backend started successfully")
+    logger.info("system", "Life2Tea backend started successfully")
     yield
 
     # ── Shutdown ───────────────────────────────────────
-    if _logger_mgr:
-        _logger_mgr.info("system", "Life2Tea backend shutting down")
-    if _lifecycle_mgr:
-        _lifecycle_mgr.stop_all()
-    if _logger_mgr:
-        _logger_mgr.info("system", "Life2Tea backend stopped")
+    logger.info("system", "Life2Tea backend shutting down")
+    app.state.lifecycle_mgr.stop_all()
+    logger.info("system", "Life2Tea backend stopped")
 
 
 # ── Create FastAPI app ─────────────────────────────────
@@ -133,6 +175,8 @@ app = FastAPI(
     description="Life2Tea — Local LLM Plugin Architecture Backend",
     version="0.1.0",
     lifespan=lifespan,
+    debug=True,
+    redirect_slashes=False,
 )
 
 # CORS (allow Electron/Tauri localhost origins)
@@ -169,37 +213,6 @@ async def root():
     }
 
 
-# ── Expose managers to routers via module-level access ───
-def get_config_mgr() -> ConfigManager:
-    if _config_mgr is None:
-        raise RuntimeError("ConfigManager not initialized")
-    return _config_mgr
-
-
-def get_logger_mgr() -> LoggerManager:
-    if _logger_mgr is None:
-        raise RuntimeError("LoggerManager not initialized")
-    return _logger_mgr
-
-
-def get_metrics_collector() -> MetricsCollector:
-    if _metrics_collector is None:
-        raise RuntimeError("MetricsCollector not initialized")
-    return _metrics_collector
-
-
-def get_lifecycle_mgr() -> PluginLifecycleManager:
-    if _lifecycle_mgr is None:
-        raise RuntimeError("PluginLifecycleManager not initialized")
-    return _lifecycle_mgr
-
-
-def get_model_registry() -> ModelRegistry:
-    if _model_registry is None:
-        raise RuntimeError("ModelRegistry not initialized")
-    return _model_registry
-
-
 # ── Server entry point ────────────────────────────────
 def start_server(host: str = "127.0.0.1", port: int = 3001):
     """Start the FastAPI server (blocking)."""
@@ -207,7 +220,7 @@ def start_server(host: str = "127.0.0.1", port: int = 3001):
 
 
 if __name__ == "__main__":
-    cfg = _config_mgr.get_global() if _config_mgr else {}
+    cfg = app.state.config_mgr.get_global() if hasattr(app.state, "config_mgr") else {}
     host = cfg.get("default_host", "127.0.0.1")
     port = int(os.environ.get("LIFE2TEA_PORT", 3001))
     start_server(host=host, port=port)

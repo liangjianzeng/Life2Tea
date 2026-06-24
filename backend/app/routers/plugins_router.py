@@ -9,11 +9,14 @@ Endpoints:
   GET  /api/plugins/{name}/health
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional, List, Dict
 
 from ..main import get_lifecycle_mgr, get_model_registry, get_config_mgr
+from ..plugins.lifecycle import PluginLifecycleManager
+from ..plugins.model_registry import ModelRegistry
+from ..core.config import ConfigManager
 
 
 router = APIRouter()
@@ -27,10 +30,11 @@ class LoadPluginBody(BaseModel):
     env: Optional[Dict[str, str]] = None
 
 
-@router.get("/")
-async def list_plugins():
-    registry = get_model_registry()
-    lifecycle = get_lifecycle_mgr()
+@router.get("", summary="List all plugins and running instances")
+async def list_plugins(
+    registry: ModelRegistry = Depends(get_model_registry),
+    lifecycle: PluginLifecycleManager = Depends(get_lifecycle_mgr),
+):
     models = registry.list_models()
     instances = lifecycle.list_instances()
     instance_map = {i["plugin_name"]: i for i in instances}
@@ -42,30 +46,34 @@ async def list_plugins():
     return {"plugins": result, "running": instances}
 
 
-@router.get("/{name}")
-async def get_plugin(name: str):
-    registry = get_model_registry()
+@router.get("/{name}", summary="Get plugin info and instance status")
+async def get_plugin(
+    name: str,
+    registry: ModelRegistry = Depends(get_model_registry),
+    lifecycle: PluginLifecycleManager = Depends(get_lifecycle_mgr),
+):
     info = registry.get_model(name)
     if not info:
         raise HTTPException(status_code=404, detail="Plugin not found")
-    lifecycle = get_lifecycle_mgr()
     inst = lifecycle.get_instance(name)
     return {"plugin": info, "instance": inst.to_dict() if inst else None}
 
 
-@router.post("/{name}/load")
-async def load_plugin(name: str, body: LoadPluginBody = None):
-    cfg = get_config_mgr().get_global()
-    registry = get_model_registry()
-    lifecycle = get_lifecycle_mgr()
-
+@router.post("/{name}/load", summary="Start a plugin instance")
+async def load_plugin(
+    name: str,
+    body: LoadPluginBody = None,
+    cfg_mgr: ConfigManager = Depends(get_config_mgr),
+    registry: ModelRegistry = Depends(get_model_registry),
+    lifecycle: PluginLifecycleManager = Depends(get_lifecycle_mgr),
+):
     info = registry.get_model(name)
     if not info:
         raise HTTPException(status_code=404, detail="Model not found")
 
     if body and body.command:
         command = body.command
-        port = body.port or cfg.get("default_port_range", [8080, 8099])[0]
+        port = body.port or cfg_mgr.get_global().get("default_port_range", [8080, 8099])[0]
         inst = lifecycle.start_plugin(
             plugin_name=name,
             plugin_type="model",
@@ -81,14 +89,18 @@ async def load_plugin(name: str, body: LoadPluginBody = None):
     return {"ok": True, "instance": inst.to_dict()}
 
 
-@router.post("/{name}/unload")
-async def unload_plugin(name: str):
-    lifecycle = get_lifecycle_mgr()
+@router.post("/{name}/unload", summary="Stop a plugin instance")
+async def unload_plugin(
+    name: str,
+    lifecycle: PluginLifecycleManager = Depends(get_lifecycle_mgr),
+):
     ok = lifecycle.stop_plugin(name)
     return {"ok": ok}
 
 
-@router.get("/{name}/health")
-async def check_plugin_health(name: str):
-    lifecycle = get_lifecycle_mgr()
+@router.get("/{name}/health", summary="Check plugin health")
+async def check_plugin_health(
+    name: str,
+    lifecycle: PluginLifecycleManager = Depends(get_lifecycle_mgr),
+):
     return lifecycle.check_health(name)
