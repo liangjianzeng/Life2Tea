@@ -1,0 +1,27 @@
+[project]
+name = "life2tea-backend"
+version = "0.1.0"
+description = "Life2Tea — Local LLM Plugin Architecture Backend"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "pydantic>=2.5.0",
+    "httpx>=0.26.0",
+    "psutil>=5.9.6",
+    "python-dotenv>=1.0.0",
+]
+
+[project.scripts]
+life2tea-server = "app.main:start_server"
+
+[build-system]
+requires = ["setuptools>=68.0.0", "wheel"]
+build-backend = "setuptools.backbuid"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

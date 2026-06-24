@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Life2Tea Plugin Manifest",
+  "description": "Plugin Interface Protocol (PIP) — manifest schema for all Life2Tea plugins",
+  "type": "object",
+  "required": ["name", "version", "type", "entry"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Unique plugin identifier, e.g. 'llama-cpp', 'code-executor'",
+      "pattern": "^[a-z0-9-]+$"
+    },
+    "version": {
+      "type": "string",
+      "description": "SemVer version, e.g. '1.0.0'",
+      "pattern": "^\\d+\\.\\d+\\.\\d+(-[a-zA-Z0-9.]+)?$"
+    },
+    "type": {
+      "type": "string",
+      "enum": ["model", "expert", "backend"],
+      "description": "'model' = LLM inference plugin; 'expert' = tool/ability plugin; 'backend' = inference runtime"
+    },
+    "entry": {
+      "type": "string",
+      "description": "Entry point relative to plugin dir: Python module, JS file, or WASM binary"
+    },
+    "description": {
+      "type": "string"
+    },
+    "author": { "type": "string" },
+    "license": { "type": "string", "default": "MIT" },
+    "homepage": { "type": "string", "format": "uri" },
+    "capabilities": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Capability tags, e.g. ['chat', 'vision', 'code-gen', 'tool-use']"
+    },
+    "resource": {
+      "type": "object",
+      "description": "Resource budget declaration",
+      "properties": {
+        "vram_mb": { "type": "integer", "minimum": 0 },
+        "ram_mb": { "type": "integer", "minimum": 0 },
+        "cpu_cores": { "type": "number", "minimum": 0 },
+        "load_timeout_sec": { "type": "integer", "default": 120 }
+      }
+    },
+    "config_schema": {
+      "type": "object",
+      "description": "JSON Schema for plugin-specific configuration UI"
+    },
+    "dependencies": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Names of other plugins this plugin depends on"
+    },
+    "lifecycle": {
+      "type": "object",
+      "properties": {
+        "on_load": { "type": "string", "description": "Function name called after plugin loads" },
+        "on_unload": { "type": "string", "description": "Function name called before plugin unloads" },
+        "health_check": { "type": "string", "description": "Function name for health probe" }
+      }
+    }
+  }
+}

@@ -1,0 +1,19 @@
+# Life2Tea Backend — Python Dependencies
+# Install: pip install -r requirements.txt
+
+# ── Core Framework ──────────────────────────────
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.5.0
+httpx>=0.26.0
+
+# ── System & Process Management ──────────────────
+psutil>=5.9.6
+
+# ── Utilities ──────────────────────────────────
+python-dotenv>=1.0.0
+
+# ── Development (optional) ───────────────────
+# pytest>=7.4.0
+# pytest-asyncio>=0.21.0
+# httpx>=0.26.0  # already listed above

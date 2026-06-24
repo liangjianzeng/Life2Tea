@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Model Plugin Schema",
+  "description": "Schema for model-type plugins (IModelPlugin interface)",
+  "allOf": [
+    { "$ref": "plugin-manifest.json" }
+  ],
+  "properties": {
+    "type": { "enum": ["model"] },
+    "backend": {
+      "type": "string",
+      "description": "Backend runtime name, e.g. 'llama-cpp', 'ollama', 'vllm'"
+    },
+    "model_family": {
+      "type": "string",
+      "description": "Model family identifier, e.g. 'lfm2', 'qwen3'"
+    },
+    "supports": {
+      "type": "object",
+      "properties": {
+        "streaming": { "type": "boolean", "default": true },
+        "function_calling": { "type": "boolean", "default": false },
+        "vision": { "type": "boolean", "default": false },
+        "audio": { "type": "boolean", "default": false },
+        "tools": { "type": "boolean", "default": false }
+      }
+    },
+    "default_sampling_params": {
+      "type": "object",
+      "description": "Default sampling parameters for this model"
+    }
+  }
+}

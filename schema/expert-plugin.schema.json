@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Expert Plugin Schema",
+  "description": "Schema for expert-type plugins (IExpertHandler interface)",
+  "allOf": [
+    { "$ref": "plugin-manifest.json" }
+  ],
+  "properties": {
+    "type": { "enum": ["expert"] },
+    "input_schema": {
+      "type": "object",
+      "description": "JSON Schema describing the tool's input parameters"
+    },
+    "output_schema": {
+      "type": "object",
+      "description": "JSON Schema describing the tool's output"
+    },
+    "dangerous": {
+      "type": "boolean",
+      "default": false,
+      "description": "If true, user confirmation is required before execution"
+    },
+    "async": {
+      "type": "boolean",
+      "default": false,
+      "description": "If true, the tool runs asynchronously"
+    }
+  }
+}

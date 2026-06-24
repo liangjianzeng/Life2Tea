@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+.venv/
+*.egg-info/
+dist/
+build/
+eggs/
+*.egg
+
+# Node
+node_modules/
+dist/
+.DS_Store
+*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Project
+log/
+*.log
+config/liangllm.json
+config/life2tea.json
+config/plugin_*.json
+config/profiles/
+models/
+backends/
+*.gguf
+
+# OS
+Thumbs.db
+Desktop.ini
