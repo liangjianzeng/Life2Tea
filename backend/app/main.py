@@ -124,7 +124,7 @@ def _get_models_dir() -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan: startup → yield → shutdown."""
-    # ── Startup ────────────────────────────────────────
+    print("[LIFECYCLE] lifespan started", flush=True)
     config_dir = _get_config_dir()
     log_dir = _get_log_dir()
     os.makedirs(config_dir, exist_ok=True)
@@ -137,6 +137,8 @@ async def lifespan(app: FastAPI):
     app.state.metrics_collector = MetricsCollector()
     app.state.lifecycle_mgr = PluginLifecycleManager(log_dir)
     app.state.model_registry = ModelRegistry(_get_models_dir())
+    from app.core.router import SystemRouter
+    app.state.system_router = SystemRouter()
 
     logger = app.state.logger_mgr
     logger.info("system", f"Life2Tea backend starting (project root: {PROJECT_ROOT})")
@@ -151,7 +153,7 @@ async def lifespan(app: FastAPI):
 
     # ── Include routers after managers are initialized ──
     from app.routers import config_router, models_router, plugins_router
-    from app.routers import chat_router, metrics_router, logs_router
+    from app.routers import chat_router, metrics_router, logs_router, router_router
 
     app.include_router(config_router, prefix="/api/config", tags=["Config"])
     app.include_router(models_router, prefix="/api/models", tags=["Models"])
@@ -159,6 +161,16 @@ async def lifespan(app: FastAPI):
     app.include_router(chat_router, prefix="/api/chat", tags=["Chat"])
     app.include_router(metrics_router, prefix="/api/metrics", tags=["Metrics"])
     app.include_router(logs_router, prefix="/api/logs", tags=["Logs"])
+    app.include_router(router_router, prefix="/api/router", tags=["Router"])
+    print("[LIFECYCLE] Routers registered, total routes:", len(app.routes))
+    # Print all routes that have a path attribute
+    for r in app.routes:
+        if hasattr(r, 'path'):
+            print("  -", r.path)
+        elif hasattr(r, 'routes'):  # IncludedRouter
+            for sr in r.routes:
+                if hasattr(sr, 'path'):
+                    print("  -", sr.path)
 
     logger.info("system", "Life2Tea backend started successfully")
     yield
@@ -209,18 +221,30 @@ async def root():
             "/api/chat",
             "/api/metrics",
             "/api/logs",
-        ],
-    }
+        "/api/router",
+    ],
+}
 
 
 # ── Server entry point ────────────────────────────────
-def start_server(host: str = "127.0.0.1", port: int = 3001):
+def start_server(host: str = "127.0.0.1", port: int = 3003):
     """Start the FastAPI server (blocking)."""
     uvicorn.run(app, host=host, port=port, log_level="info")
 
 
 if __name__ == "__main__":
-    cfg = app.state.config_mgr.get_global() if hasattr(app.state, "config_mgr") else {}
+    # Read config directly (app.state not yet initialized)
+    config_dir = _get_config_dir()
+    config_path = os.path.join(config_dir, "life2tea.json")
+    cfg = {}
+    if os.path.isfile(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except Exception:
+            pass
     host = cfg.get("default_host", "127.0.0.1")
-    port = int(os.environ.get("LIFE2TEA_PORT", 3001))
+    # Priority: env LIFE2TEA_PORT > config backend_port > default 3003
+    port = int(os.environ.get("LIFE2TEA_PORT", cfg.get("backend_port", 3003)))
+    print(f"[MAIN] Starting on {host}:{port}", flush=True)
     start_server(host=host, port=port)

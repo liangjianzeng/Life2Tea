@@ -1,18 +1,18 @@
 <template>
   <div class="chat-view">
     <div class="chat-header">
-      <h2>Chat</h2>
+      <h2>{{ t("chat.title") }}</h2>
       <span class="model-badge" v-if="selectedModel">{{ selectedModel }}</span>
     </div>
 
     <div class="messages" ref="messagesContainer">
       <div v-for="(msg, idx) in messages" :key="idx"
            :class="['message', msg.role]">
-        <div class="role">{{ msg.role === 'user' ? 'You' : 'AI' }}</div>
+        <div class="role">{{ msg.role === 'user' ? t('chat.you') : t('chat.ai') }}</div>
         <div class="content">{{ msg.content }}</div>
       </div>
       <div v-if="loading" class="message assistant">
-        <div class="role">AI</div>
+        <div class="role">{{ t("chat.ai") }}</div>
         <div class="content">{{ streamingContent }}<span class="cursor">|</span></div>
       </div>
     </div>
@@ -20,14 +20,14 @@
     <form class="chat-input" @submit.prevent="sendMessage">
       <textarea
         v-model="inputMessage"
-        placeholder="Type a message... (Shift+Enter for new line)"
+        :placeholder="t('chat.placeholder')"
         @keydown="handleKeydown"
         :disabled="loading"
         rows="1"
         ref="inputRef"
       ></textarea>
       <button type="submit" :disabled="loading || !inputMessage.trim()">
-        {{ loading ? 'Sending...' : 'Send' }}
+        {{ loading ? t('chat.sending') : t('chat.send') }}
       </button>
     </form>
   </div>
@@ -35,6 +35,9 @@
 
 <script setup lang="ts">
 import { ref, onMounted, nextTick } from "vue";
+import { useI18n } from "vue-i18n";
+
+const { t } = useI18n();
 
 const messages = ref<{ role: string; content: string }[]>([]);
 const inputMessage = ref("");
@@ -48,13 +51,11 @@ async function sendMessage() {
   const text = inputMessage.value.trim();
   if (!text || loading.value) return;
 
-  // Add user message
   messages.value.push({ role: "user", content: text });
   inputMessage.value = "";
   loading.value = true;
   streamingContent.value = "";
 
-  // Auto-scroll to bottom
   await nextTick();
   scrollToBottom();
 
@@ -73,7 +74,6 @@ async function sendMessage() {
       throw new Error(`HTTP ${response.status}: ${await response.text()}`);
     }
 
-    // Read SSE stream
     const reader = response.body?.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -106,13 +106,12 @@ async function sendMessage() {
       }
     }
 
-    // Add completed message
     messages.value.push({ role: "assistant", content: streamingContent.value });
     streamingContent.value = "";
   } catch (error: any) {
     messages.value.push({
       role: "assistant",
-      content: `Error: ${error.message || "Failed to send message"}`,
+      content: t("chat.error", { msg: error.message || t("chat.error", { msg: "Failed to send message" }) }),
     });
   } finally {
     loading.value = false;

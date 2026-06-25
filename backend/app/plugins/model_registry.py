@@ -183,10 +183,14 @@ class ModelRegistry:
             if info.family.startswith(fam_key):
                 params.update(overrides)
         size = info.size_gb
+        # Be conservative with context size for large models on 16GB GPU
         if size > 18:
             params["ctx"] = min(params.get("ctx", 32768), 16384)
         elif size > 12:
-            params["ctx"] = min(params.get("ctx", 32768), 24576)
+            # 13-18GB models on 16GB GPU: limit to 20K to leave room for KV cache
+            params["ctx"] = min(params.get("ctx", 32768), 20480)
+        elif size > 8:
+            params["ctx"] = min(params.get("ctx", 32768), 32768)
         elif size < 4:
             params["ctx"] = max(params.get("ctx", 32768), 65536)
         return params
@@ -197,8 +201,30 @@ class ModelRegistry:
         if not info:
             raise ValueError(f"Unknown model family: {family}")
 
-        args = [server_exe]
-        args += ["--model", info.path]
+        # Convert paths to Windows format (backslashes) for llama-server.exe
+        def to_windows_path(p: str) -> str:
+            if not p:
+                return p
+            # Git Bash path (/d/...) -> Windows (D:\)
+            if p.startswith("/"):
+                parts = p.split("/")
+                if len(parts) > 1 and len(parts[1]) == 1:
+                    drive = parts[1].upper() + ":\\"
+                    return drive + "\\".join(parts[2:])
+            # Already has drive letter (D:/ or D:\) - normalize to backslashes
+            if ":" in p:
+                return p.replace("/", "\\")
+            # Relative path - just replace forward slashes
+            return p.replace("/", "\\")
+
+        model_path = to_windows_path(info.path)
+        server_exe_win = to_windows_path(server_exe)
+
+        print(f"[DEBUG] model_path={model_path}", flush=True)
+        print(f"[DEBUG] server_exe={server_exe_win}", flush=True)
+
+        args = [server_exe_win]
+        args += ["--model", model_path]
         args += ["-ngl", str(params.get("ngl", 99))]
         args += ["-c", str(params.get("ctx", 32768))]
         args += ["--parallel", str(params.get("parallel", 1))]
@@ -208,7 +234,14 @@ class ModelRegistry:
         args += ["--cache-type-k", params.get("cache_type_k", "q8_0")]
         args += ["--cache-type-v", params.get("cache_type_v", "q8_0")]
 
-        if params.get("mmap", True):
+        # Use --no-mmap for large models (> 8GB) to avoid address space issues
+        # Actually, llama.cpp does NOT have a --no-mmap flag.
+        # Not adding --mmap is equivalent to no-mmap.
+        # So we just DON'T add --mmap for large models.
+        if info.size_gb > 8:
+            # Do NOT add --mmap (equivalent to no-mmap)
+            pass
+        elif params.get("mmap", True):
             args += ["--mmap"]
         if params.get("mlock", False):
             args += ["--mlock"]
@@ -243,6 +276,10 @@ class ModelRegistry:
             args += ["--spec-draft-type-v", params.get("spec_draft_type_v", "f16")]
 
         args += ["--alias", family]
+
+        # Add log-file argument to capture server logs
+        log_file = os.path.join(os.path.dirname(info.path), f"{family}_server.log")
+        args += ["--log-file", log_file]
 
         reasoning = params.get("reasoning")
         if reasoning is not None:

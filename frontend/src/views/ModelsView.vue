@@ -1,10 +1,10 @@
 <template>
   <div class="models-view">
     <div class="models-header">
-      <h2>Models</h2>
+      <h2>{{ t("models.title") }}</h2>
       <div class="header-actions">
         <button @click="scan" :disabled="scanning" class="btn-scan">
-          {{ scanning ? 'Scanning...' : 'Scan Models' }}
+          {{ scanning ? t("models.scanning") : t("models.scan") }}
         </button>
       </div>
     </div>
@@ -15,9 +15,9 @@
           <strong class="model-name">{{ m.display }}</strong>
           <span class="model-meta">{{ m.size_gb }} GB · {{ m.quantization }}</span>
           <span v-if="m.instance" class="model-status running">
-            Running on port {{ m.instance.port }}
+            {{ t("models.running", { port: m.instance.port }) }}
           </span>
-          <span v-else class="model-status stopped">Stopped</span>
+          <span v-else class="model-status stopped">{{ t("models.stopped") }}</span>
         </div>
         <div class="model-actions">
           <button
@@ -26,7 +26,7 @@
             :disabled="loadingModel === m.family"
             class="btn-load"
           >
-            {{ loadingModel === m.family ? 'Loading...' : 'Load' }}
+            {{ loadingModel === m.family ? t("models.loading") : t("models.load") }}
           </button>
           <button
             v-else
@@ -34,21 +34,24 @@
             :disabled="loadingModel === m.family"
             class="btn-unload"
           >
-            {{ loadingModel === m.family ? 'Unloading...' : 'Unload' }}
+            {{ loadingModel === m.family ? t("models.unloading") : t("models.unload") }}
           </button>
         </div>
       </div>
     </div>
 
     <div v-else class="empty-state">
-      <p>No models found.</p>
-      <p class="hint">Configure <code>models_dir</code> in Settings, then click "Scan Models".</p>
+      <p>{{ t("models.none") }}</p>
+      <p class="hint">{{ t("models.hint", { path: "`models_dir`" }) }}</p>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
+import { useI18n } from "vue-i18n";
+
+const { t } = useI18n();
 
 interface Model {
   family: string;
@@ -79,7 +82,7 @@ async function scan() {
     const data = await res.json();
     models.value = data.models || [];
   } catch (e) {
-    alert("Failed to scan models");
+    alert(t("models.errorScan"));
   } finally {
     scanning.value = false;
   }
@@ -98,17 +101,17 @@ async function loadModel(m: Model) {
     if (data.ok) {
       await refresh();
     } else {
-      alert(`Failed to load model: ${data.error || "Unknown error"}`);
+      alert(t("models.errorLoad", { msg: data.error || "Unknown error" }));
     }
   } catch (e: any) {
-    alert(`Error: ${e.message}`);
+    alert(t("models.errorLoad", { msg: e.message }));
   } finally {
     loadingModel.value = null;
   }
 }
 
 async function unloadModel(m: Model) {
-  if (!confirm(`Unload ${m.display}?`)) return;
+  if (!confirm(t("models.confirmUnload", { name: m.display }))) return;
 
   loadingModel.value = m.family;
   try {
@@ -119,10 +122,10 @@ async function unloadModel(m: Model) {
     if (data.ok) {
       await refresh();
     } else {
-      alert(`Failed to unload model: ${data.error || "Unknown error"}`);
+      alert(t("models.errorUnload", { msg: data.error || "Unknown error" }));
     }
   } catch (e: any) {
-    alert(`Error: ${e.message}`);
+    alert(t("models.errorUnload", { msg: e.message }));
   } finally {
     loadingModel.value = null;
   }

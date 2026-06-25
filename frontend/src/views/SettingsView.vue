@@ -1,86 +1,86 @@
 <template>
   <div class="settings-view">
-    <h2>Settings</h2>
+    <h2>{{ t("settings.title") }}</h2>
 
     <div class="settings-section">
-      <h3>Paths</h3>
+      <h3>{{ t("settings.section.paths") }}</h3>
       <div class="form-group">
-        <label>Models Directory</label>
-        <input v-model="config.models_dir" placeholder="D:/MyLLM/models" />
+        <label>{{ t("settings.labels.modelsDir") }}</label>
+        <input v-model="config.models_dir" :placeholder="t('settings.labels.modelsDir')" />
       </div>
       <div class="form-group">
-        <label>llama.cpp Backend Dir</label>
-        <input v-model="config.llama_backend_dir" placeholder="D:/MyLLM/llama.cpp" />
+        <label>{{ t("settings.labels.backendDir") }}</label>
+        <input v-model="config.llama_backend_dir" :placeholder="t('settings.labels.backendDir')" />
       </div>
       <div class="form-group">
-        <label>llama-server.exe Path</label>
-        <input v-model="config.llama_server_exe" placeholder="D:/MyLLM/llama.cpp/llama-server.exe" />
+        <label>{{ t("settings.labels.serverExe") }}</label>
+        <input v-model="config.llama_server_exe" :placeholder="t('settings.labels.serverExe')" />
       </div>
     </div>
 
     <div class="settings-section">
-      <h3>Model Defaults</h3>
+      <h3>{{ t("settings.section.modelDefaults") }}</h3>
       <div class="form-group">
-        <label>GPU Layers</label>
+        <label>{{ t("settings.labels.gpuLayers") }}</label>
         <input v-model.number="config.gpu_layers" type="number" min="0" max="999" />
       </div>
       <div class="form-group">
-        <label>Context Size</label>
+        <label>{{ t("settings.labels.ctxSize") }}</label>
         <input v-model.number="config.ctx_size" type="number" min="512" max="131072" />
       </div>
       <div class="form-group">
-        <label>Threads</label>
+        <label>{{ t("settings.labels.threads") }}</label>
         <input v-model.number="config.threads" type="number" min="1" max="32" />
       </div>
       <div class="form-group">
-        <label>Batch Size</label>
+        <label>{{ t("settings.labels.batchSize") }}</label>
         <input v-model.number="config.batch_size" type="number" min="1" max="4096" />
       </div>
     </div>
 
     <div class="settings-section">
-      <h3>Backend Options</h3>
+      <h3>{{ t("settings.section.backendOptions") }}</h3>
       <div class="form-group">
-        <label>Backend Preference</label>
+        <label>{{ t("settings.labels.backendPref") }}</label>
         <select v-model="config.backend_preference">
-          <option value="auto">Auto</option>
-          <option value="cuda">CUDA</option>
-          <option value="vulkan">Vulkan</option>
-          <option value="cpu">CPU</option>
+          <option value="auto">{{ t("settings.backendPref.auto") }}</option>
+          <option value="cuda">{{ t("settings.backendPref.cuda") }}</option>
+          <option value="vulkan">{{ t("settings.backendPref.vulkan") }}</option>
+          <option value="cpu">{{ t("settings.backendPref.cpu") }}</option>
         </select>
       </div>
       <div class="form-group checkbox-group">
         <label>
           <input v-model="config.flash_attn" type="checkbox" />
-          Flash Attention
+          {{ t("settings.options.flashAttn") }}
         </label>
       </div>
       <div class="form-group checkbox-group">
         <label>
           <input v-model="config.cont_batching" type="checkbox" />
-          Continuous Batching
+          {{ t("settings.options.contBatching") }}
         </label>
       </div>
       <div class="form-group checkbox-group">
         <label>
           <input v-model="config.mlock" type="checkbox" />
-          Mlock (Lock Memory)
+          {{ t("settings.options.mlock") }}
         </label>
       </div>
       <div class="form-group checkbox-group">
         <label>
           <input v-model="config.mmap" type="checkbox" />
-          Mmap (Memory Map)
+          {{ t("settings.options.mmap") }}
         </label>
       </div>
     </div>
 
     <div class="settings-actions">
       <button @click="save" :disabled="saving" class="btn-save">
-        {{ saving ? 'Saving...' : 'Save Settings' }}
+        {{ saving ? t("settings.saving") : t("settings.save") }}
       </button>
       <button @click="reload" :disabled="saving" class="btn-reload">
-        Reload from Disk
+        {{ t("settings.reload") }}
       </button>
     </div>
 
@@ -92,6 +92,9 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
+import { useI18n } from "vue-i18n";
+
+const { t } = useI18n();
 
 const config = ref<any>({});
 const saving = ref(false);
@@ -104,7 +107,7 @@ async function load() {
     if (!res.ok) throw new Error("Failed to load config");
     config.value = await res.json();
   } catch (e: any) {
-    showMessage(`Error: ${e.message}`, "error");
+    showMessage(t("settings.error", { msg: e.message }), "error");
   }
 }
 
@@ -118,12 +121,12 @@ async function save() {
     });
     const data = await res.json();
     if (data.ok) {
-      showMessage("Settings saved successfully!", "success");
+      showMessage(t("settings.saved"), "success");
     } else {
-      showMessage(`Error: ${data.error || "Unknown error"}`, "error");
+      showMessage(t("settings.error", { msg: data.error || "Unknown error" }), "error");
     }
   } catch (e: any) {
-    showMessage(`Error: ${e.message}`, "error");
+    showMessage(t("settings.error", { msg: e.message }), "error");
   } finally {
     saving.value = false;
   }
@@ -131,7 +134,7 @@ async function save() {
 
 function reload() {
   load();
-  showMessage("Reloaded from disk", "success");
+  showMessage(t("settings.reloaded"), "success");
 }
 
 function showMessage(text: string, type: "success" | "error") {

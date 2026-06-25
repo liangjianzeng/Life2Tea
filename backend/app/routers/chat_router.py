@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 
 from ..experts.chat_handler import ChatHandler
+from ..core.router import SystemRouter
 
 
 router = APIRouter()
@@ -44,29 +45,53 @@ class CompletionBody(BaseModel):
     temperature: float = 0.7
 
 
-def _get_handler(request: Request) -> ChatHandler:
-    """Get or create ChatHandler, dynamically discovering running model plugins."""
+def _get_router(request: Request) -> SystemRouter:
+    """Get SystemRouter instance from app.state."""
+    return request.app.state.system_router
+
+
+def _get_running_plugins(request: Request) -> list:
+    """Get list of running model plugin names."""
     state = request.app.state
     lifecycle_mgr = state.lifecycle_mgr
-
-    # Find first running model plugin
     instances = lifecycle_mgr.list_instances()
-    if instances:
-        inst = instances[0]
-        host, port = inst["host"], inst["port"]
-        # Check if handler needs update
-        if (
-            not hasattr(state, "chat_handler")
-            or state.chat_handler is None
-            or state.chat_handler._host != host
-            or state.chat_handler._port != port
-        ):
-            state.chat_handler = ChatHandler(host=host, port=port)
-    elif not hasattr(state, "chat_handler") or state.chat_handler is None:
-        # No running plugin — use default from config
-        cfg = state.config_mgr.get_global()
-        host = cfg.get("default_host", "127.0.0.1")
-        port = cfg.get("default_port_range", [8080, 8099])[0]
+    return [inst["plugin_name"] for inst in instances if inst["status"] == "running"]
+
+
+def _get_host_port_for_plugin(request: Request, plugin_name: str) -> tuple:
+    """Find host:port for a running plugin."""
+    state = request.app.state
+    lifecycle_mgr = state.lifecycle_mgr
+    instances = lifecycle_mgr.list_instances()
+    for inst in instances:
+        if inst["plugin_name"] == plugin_name and inst["status"] == "running":
+            return inst["host"], inst["port"]
+    # Plugin not running — return defaults
+    return "127.0.0.1", 8080
+
+
+def _get_handler(request: Request, messages: List[Dict[str, str]], model_pref: Optional[str] = None) -> ChatHandler:
+    """Get ChatHandler, using SystemRouter to select the best model plugin."""
+    state = request.app.state
+    router = _get_router(request)
+
+    # Use router to select model
+    running = _get_running_plugins(request)
+    selected_plugin, _, _ = router.select_model(
+        messages=messages,
+        model_preference=model_pref,
+        running_plugins=running,
+    )
+
+    host, port = _get_host_port_for_plugin(request, selected_plugin)
+
+    # Check if handler needs update
+    if (
+        not hasattr(state, "chat_handler")
+        or state.chat_handler is None
+        or state.chat_handler._host != host
+        or state.chat_handler._port != port
+    ):
         state.chat_handler = ChatHandler(host=host, port=port)
 
     return state.chat_handler
@@ -74,8 +99,9 @@ def _get_handler(request: Request) -> ChatHandler:
 
 @router.post("/completions", summary="OpenAI-style chat completions")
 async def chat_completions(body: ChatCompletionBody, request: Request):
-    handler = _get_handler(request)
     messages = [m.dict() for m in body.messages]
+    handler = _get_handler(request, messages, model_pref=body.model)
+
 
     if body.stream:
         async def gen():
@@ -108,7 +134,9 @@ async def chat_completions(body: ChatCompletionBody, request: Request):
 
 @router.post("/completion", summary="Text completion")
 async def completion(body: CompletionBody, request: Request):
-    handler = _get_handler(request)
+    # Build a fake messages list for the router
+    fake_messages = [{"role": "user", "content": body.prompt}]
+    handler = _get_handler(request, fake_messages)
     result = await handler.completion(
         prompt=body.prompt,
         stream=body.stream,
@@ -122,11 +150,12 @@ async def completion(body: CompletionBody, request: Request):
 
 @router.get("/model-info", summary="Get loaded model info from running backend")
 async def get_model_info(request: Request):
-    handler = _get_handler(request)
+    # Use default chat messages for routing
+    handler = _get_handler(request, [{"role": "user", "content": "hi"}])
     return await handler.get_model_info()
 
 
 @router.get("/health", summary="Check if chat backend is reachable")
 async def chat_health(request: Request):
-    handler = _get_handler(request)
+    handler = _get_handler(request, [{"role": "user", "content": "hi"}])
     return await handler.health_check()

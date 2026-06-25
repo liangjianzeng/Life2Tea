@@ -40,3 +40,4 @@ backends/
 # OS
 Thumbs.db
 Desktop.ini
+config/global.json

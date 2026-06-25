@@ -32,6 +32,28 @@ life2tea/
 └── rfcs/           # RFC design docs
 ```
 
+## ⚙️ Configuration
+
+Ports and paths are managed in `config/life2tea.json`:
+
+```json
+{
+  "backend_port": 3003,
+  "frontend_port": 5005,
+  "default_host": "127.0.0.1"
+}
+```
+
+Frontend proxy target is in `frontend/.env.development`:
+```
+VITE_BACKEND_URL=http://127.0.0.1:3003
+VITE_FRONTEND_PORT=5005
+```
+
+> **Changing ports**: Update `backend_port` in `config/life2tea.json` and `VITE_BACKEND_URL` in `frontend/.env.development`, then restart both services.
+
+---
+
 ## 🚀 Quick Start
 
 ### Backend
@@ -40,7 +62,7 @@ life2tea/
 cd backend
 pip install -r requirements.txt
 python -m app.main
-# Server starts at http://127.0.0.1:3001
+# Server starts at http://127.0.0.1:3003
 ```
 
 ### Frontend
@@ -49,7 +71,7 @@ python -m app.main
 cd frontend
 npm install
 npm run dev
-# Vite dev server at http://localhost:5173
+# Vite dev server at http://localhost:5005
 ```
 
 ## 🔌 Plugin Interface Protocol (PIP)

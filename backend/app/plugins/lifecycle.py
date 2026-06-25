@@ -7,6 +7,7 @@ Generic — works for any plugin type (model, expert, backend).
 """
 
 import os
+import sys
 import time
 import subprocess
 import threading
@@ -17,6 +18,20 @@ from dataclasses import dataclass, field
 from enum import Enum
 
 import psutil
+
+
+def _log_reader(stream, log_path: str):
+    """Read lines from stream and append to log file (runs in daemon thread)."""
+    try:
+        with open(log_path, "a", encoding="utf-8", errors="replace") as f:
+            for line in iter(stream.readline, b""):
+                if not line:
+                    break
+                decoded = line.decode("utf-8", errors="replace") if isinstance(line, bytes) else line
+                f.write(decoded)
+                f.flush()
+    except Exception:
+        pass
 
 
 class PluginStatus(str, Enum):
@@ -117,23 +132,58 @@ class PluginLifecycleManager:
 
             log_file = os.path.join(self._log_dir, f"plugin_{plugin_name}.log")
             proc_env = os.environ.copy()
+            # Disable NVIDIA CUDA cache to avoid sandbox blocking
+            proc_env["CUDA_CACHE_DISABLE"] = "1"
+            proc_env["CUDA_CACHE_PATH"] = ""
             if env:
                 proc_env.update(env)
 
-            # Open log file for both stdout and stderr
-            log_fh = open(log_file, "w", encoding="utf-8", errors="replace")
-            # Set cwd to the executable's directory so DLLs can be found
-            exe_path = command[0]
-            exe_dir = os.path.dirname(exe_path) or "."
+            exe_dir = os.path.dirname(command[0]) or "."
 
-            proc = subprocess.Popen(
-                command,
-                stdout=log_fh,
-                stderr=subprocess.STDOUT,
-                env=proc_env,
-                cwd=exe_dir,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
+            print(f"[LIFECYCLE] Starting {plugin_name}: {command}", flush=True)
+
+            try:
+                # Use powershell.exe to start llama-server.exe in a new detached process.
+                # This avoids sandbox restrictions that block CUDA init when started via Popen directly.
+                cmd_line = " ".join(f'"{arg}"' if " " in str(arg) else str(arg) for arg in command)
+                ps_cmd = f'Start-Process -FilePath "{command[0]}" -ArgumentList {",".join(f'"{a}"' for a in command[1:])} -PassThru'
+
+                print(f"[LIFECYCLE] Launching via powershell.exe: {ps_cmd}", flush=True)
+
+                proc = subprocess.Popen(
+                    ["powershell.exe", "-Command", ps_cmd],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    stdin=None,
+                    env=proc_env,
+                    cwd=exe_dir,
+                    creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
+                    shell=False,
+                )
+                # Read the output to get the new process PID
+                output = proc.stdout.read().decode("utf-8", errors="replace").strip()
+                print(f"[LIFECYCLE] PowerShell output: {output}", flush=True)
+                print(f"[LIFECYCLE] Launcher started, PID={proc.pid}", flush=True)
+            except Exception as e:
+                raise RuntimeError(f"Failed to start {plugin_name}: {e}")
+
+            # Wait for health endpoint to respond (up to 60s for large models)
+            actual_port = port or 8080
+            for i in range(60):
+                time.sleep(1)
+                try:
+                    url = f"http://{host}:{actual_port}{health_endpoint}"
+                    req = urllib.request.urlopen(url, timeout=2)
+                    if req.status == 200:
+                        print(f"[LIFECYCLE] {plugin_name} healthy after {i+1}s", flush=True)
+                        break
+                except Exception:
+                    pass
+            else:
+                # Timeout - check if process is still running
+                if proc.poll() is not None:
+                    raise RuntimeError(f"Failed to start {plugin_name}: process exited with code {proc.poll()}")
+                print(f"[LIFECYCLE] Warning: {plugin_name} not healthy after 60s but process is running", flush=True)
 
             inst = PluginInstance(
                 plugin_name=plugin_name,
@@ -141,10 +191,10 @@ class PluginLifecycleManager:
                 pid=proc.pid,
                 process=proc,
                 host=host,
-                port=port,
+                port=actual_port,
                 log_file=log_file,
                 started_at=time.time(),
-                status=PluginStatus.LOADING,
+                status=PluginStatus.RUNNING,
                 health_endpoint=health_endpoint,
             )
             self._instances[plugin_name] = inst

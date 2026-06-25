@@ -1,9 +1,9 @@
 <template>
   <div class="plugins-view">
     <div class="plugins-header">
-      <h2>Plugins</h2>
+      <h2>{{ t("plugins.title") }}</h2>
       <button @click="refresh" :disabled="loading" class="btn-refresh">
-        {{ loading ? 'Refreshing...' : 'Refresh' }}
+        {{ loading ? t("plugins.refreshing") : t("plugins.refresh") }}
       </button>
     </div>
 
@@ -13,9 +13,9 @@
           <strong class="plugin-name">{{ p.display }}</strong>
           <span class="plugin-type">{{ p.plugin_type || 'model' }}</span>
           <span v-if="p.instance" class="plugin-status running">
-            Running on port {{ p.instance.port }}
+            {{ t("plugins.running", { port: p.instance.port }) }}
           </span>
-          <span v-else class="plugin-status stopped">Stopped</span>
+          <span v-else class="plugin-status stopped">{{ t("plugins.stopped") }}</span>
         </div>
         <div class="plugin-actions">
           <button
@@ -24,7 +24,7 @@
             :disabled="loadingPlugin === p.family"
             class="btn-load"
           >
-            {{ loadingPlugin === p.family ? 'Loading...' : 'Load' }}
+            {{ loadingPlugin === p.family ? t("plugins.loading") : t("plugins.load") }}
           </button>
           <button
             v-else
@@ -32,21 +32,24 @@
             :disabled="loadingPlugin === p.family"
             class="btn-unload"
           >
-            {{ loadingPlugin === p.family ? 'Unloading...' : 'Unload' }}
+            {{ loadingPlugin === p.family ? t("plugins.unloading") : t("plugins.unload") }}
           </button>
         </div>
       </div>
     </div>
 
     <div v-else class="empty-state">
-      <p>No plugins found.</p>
-      <p class="hint">Scan models in Settings to discover plugins.</p>
+      <p>{{ t("plugins.none") }}</p>
+      <p class="hint">{{ t("plugins.hint") }}</p>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
+import { useI18n } from "vue-i18n";
+
+const { t } = useI18n();
 
 interface Plugin {
   family: string;
@@ -79,7 +82,7 @@ async function refresh() {
     const data = await res.json();
     plugins.value = data.plugins || [];
   } catch (e) {
-    alert("Failed to load plugins");
+    alert(t("plugins.errorLoad"));
   } finally {
     loading.value = false;
   }
@@ -98,17 +101,17 @@ async function loadPlugin(p: Plugin) {
     if (data.ok) {
       await refresh();
     } else {
-      alert(`Failed to load plugin: ${data.error || "Unknown error"}`);
+      alert(t("plugins.errorLoad", { msg: data.error || "Unknown error" }));
     }
   } catch (e: any) {
-    alert(`Error: ${e.message}`);
+    alert(t("plugins.errorLoad", { msg: e.message }));
   } finally {
     loadingPlugin.value = null;
   }
 }
 
 async function unloadPlugin(p: Plugin) {
-  if (!confirm(`Unload ${p.display}?`)) return;
+  if (!confirm(t("plugins.confirmUnload", { name: p.display }))) return;
 
   loadingPlugin.value = p.family;
   try {
@@ -119,10 +122,10 @@ async function unloadPlugin(p: Plugin) {
     if (data.ok) {
       await refresh();
     } else {
-      alert(`Failed to unload plugin: ${data.error || "Unknown error"}`);
+      alert(t("plugins.errorUnload", { msg: data.error || "Unknown error" }));
     }
   } catch (e: any) {
-    alert(`Error: ${e.message}`);
+    alert(t("plugins.errorUnload", { msg: e.message }));
   } finally {
     loadingPlugin.value = null;
   }

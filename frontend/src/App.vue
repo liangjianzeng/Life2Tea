@@ -1,13 +1,14 @@
 <template>
   <div id="app">
     <header class="app-header">
-      <h1>Life2Tea <span class="version">v0.1.0</span></h1>
+      <h1>{{ t("app.title") }} <span class="version">{{ t("app.version") }}</span></h1>
       <nav>
-        <router-link to="/">Chat</router-link>
-        <router-link to="/models">Models</router-link>
-        <router-link to="/plugins">Plugins</router-link>
-        <router-link to="/settings">Settings</router-link>
+        <router-link to="/">{{ t("app.nav.chat") }}</router-link>
+        <router-link to="/models">{{ t("app.nav.models") }}</router-link>
+        <router-link to="/plugins">{{ t("app.nav.plugins") }}</router-link>
+        <router-link to="/settings">{{ t("app.nav.settings") }}</router-link>
       </nav>
+      <button class="lang-btn" @click="toggle">{{ locale === 'zh-CN' ? 'EN' : '中文' }}</button>
     </header>
     <main class="app-main">
       <router-view />
@@ -16,19 +17,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
-import { useRouter } from "vue-router";
+import { useI18n } from "vue-i18n";
+import { toggleLocale } from "./i18n";
 
-const health = ref<{ status: string; version: string } | null>(null);
+const { t, locale } = useI18n();
 
-onMounted(async () => {
-  try {
-    const res = await fetch("/api/health");
-    health.value = await res.json();
-  } catch (e) {
-    health.value = { status: "unreachable", version: "unknown" };
-  }
-});
+function toggle() {
+  toggleLocale();
+}
 </script>
 
 <style>
@@ -58,5 +54,18 @@ onMounted(async () => {
 .version {
   font-size: 0.6em;
   opacity: 0.6;
+}
+.lang-btn {
+  margin-left: 16px;
+  padding: 4px 12px;
+  background: #2d2d4a;
+  color: #e0e0ff;
+  border: 1px solid #534ab7;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85em;
+}
+.lang-btn:hover {
+  background: #3d3d5a;
 }
 </style>
