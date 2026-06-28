@@ -28,7 +28,7 @@ def temp_config_dir(tmp_path):
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     
-    # Write a minimal global config
+    # Write a minimal global config (life2tea.json is the single source of truth)
     import json
     config = {
         "llama_backend_dir": "",
@@ -36,7 +36,7 @@ def temp_config_dir(tmp_path):
         "default_port_range": [8080, 8099],
         "default_host": "127.0.0.1",
     }
-    (config_dir / "global.json").write_text(
+    (config_dir / "life2tea.json").write_text(
         json.dumps(config, indent=2),
         encoding="utf-8"
     )

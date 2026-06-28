@@ -34,7 +34,13 @@ life2tea/
 
 ## ⚙️ Configuration
 
-Ports and paths are managed in `config/life2tea.json`:
+Ports and paths are managed in `config/life2tea.json` (the single source of truth for global config). `config/life2tea.json` is git-ignored because it holds local paths; copy the template to create it:
+
+```bash
+cp config/life2tea.example.json config/life2tea.json
+```
+
+Then edit `models_dir`, `llama_backend_dir`, and ports as needed:
 
 ```json
 {

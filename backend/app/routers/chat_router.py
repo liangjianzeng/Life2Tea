@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 
 from ..experts.chat_handler import ChatHandler
-from ..core.router import SystemRouter
+from ..core.routing import SystemRouter
 
 
 router = APIRouter()

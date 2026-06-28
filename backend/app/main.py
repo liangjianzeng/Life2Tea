@@ -98,6 +98,13 @@ def get_model_registry(request: Request = None) -> ModelRegistry:
     return mgr
 
 
+def get_plugin_registry(request: Request = None):
+    """PluginRegistry dependency. Returns None if not initialized (e.g. in
+    unit tests) so routers can degrade gracefully to the legacy registry."""
+    state = _get_state(request)
+    return getattr(state, "plugin_registry", None)
+
+
 def _get_config_dir() -> str:
     return os.path.join(PROJECT_ROOT, "config")
 
@@ -109,8 +116,9 @@ def _get_log_dir() -> str:
 def _get_models_dir() -> str:
     # Can't use get_config_mgr here because this is called during startup
     # before the state is fully initialized. Read config file directly.
+    # life2tea.json is the single source of truth for global config.
     config_dir = _get_config_dir()
-    config_path = os.path.join(config_dir, "global.json")
+    config_path = os.path.join(config_dir, "life2tea.json")
     if os.path.isfile(config_path):
         try:
             with open(config_path, "r", encoding="utf-8") as f:
@@ -137,23 +145,36 @@ async def lifespan(app: FastAPI):
     app.state.metrics_collector = MetricsCollector()
     app.state.lifecycle_mgr = PluginLifecycleManager(log_dir)
     app.state.model_registry = ModelRegistry(_get_models_dir())
-    from app.core.router import SystemRouter
+    from app.core.routing import SystemRouter
     app.state.system_router = SystemRouter()
+
+    # Initialize plugin registry: manifests first, GGUF files as fallback.
+    from app.plugins.registry import PluginRegistry
+    models_dir = _get_models_dir()
+    root = Path(PROJECT_ROOT)
+    plugin_roots = [str(root / "plugins" / "models"),
+                    str(root / "plugins" / "experts")]
+    app.state.plugin_registry = PluginRegistry(
+        plugin_roots, env={"MODELS_DIR": models_dir or ""}, repo_root=str(root)
+    )
+    app.state.plugin_registry.discover_with_gguf_fallback(models_dir)
 
     logger = app.state.logger_mgr
     logger.info("system", f"Life2Tea backend starting (project root: {PROJECT_ROOT})")
     logger.info("system", f"Config dir: {config_dir}")
     logger.info("system", f"Log dir: {log_dir}")
 
-    # Auto-scan models if dir is configured
-    models_dir = _get_models_dir()
+    # Auto-scan models if dir is configured (legacy GGUF index, kept for compat)
     if models_dir and os.path.isdir(models_dir):
         app.state.model_registry.scan()
-        logger.info("system", f"Scanned models dir: {models_dir}, found {len(app.state.model_registry.list_models())} models")
+        n_plugins = len([d for d in app.state.plugin_registry.list_plugins(type="model")])
+        logger.info("system", f"Scanned models dir: {models_dir}, found "
+                    f"{len(app.state.model_registry.list_models())} models, "
+                    f"{n_plugins} plugin descriptors")
 
     # ── Include routers after managers are initialized ──
     from app.routers import config_router, models_router, plugins_router
-    from app.routers import chat_router, metrics_router, logs_router, router_router
+    from app.routers import chat_router, metrics_router, logs_router, routing_router
 
     app.include_router(config_router, prefix="/api/config", tags=["Config"])
     app.include_router(models_router, prefix="/api/models", tags=["Models"])
@@ -161,7 +182,7 @@ async def lifespan(app: FastAPI):
     app.include_router(chat_router, prefix="/api/chat", tags=["Chat"])
     app.include_router(metrics_router, prefix="/api/metrics", tags=["Metrics"])
     app.include_router(logs_router, prefix="/api/logs", tags=["Logs"])
-    app.include_router(router_router, prefix="/api/router", tags=["Router"])
+    app.include_router(routing_router, prefix="/api/router", tags=["Router"])
     print("[LIFECYCLE] Routers registered, total routes:", len(app.routes))
     # Print all routes that have a path attribute
     for r in app.routes:
@@ -187,14 +208,21 @@ app = FastAPI(
     description="Life2Tea — Local LLM Plugin Architecture Backend",
     version="0.1.0",
     lifespan=lifespan,
-    debug=True,
     redirect_slashes=False,
 )
 
-# CORS (allow Electron/Tauri localhost origins)
+# CORS — local desktop app only. Vite dev server (5005), Electron/Tauri
+# (file://), and loopback origins are the legitimate clients.
+_LOCAL_ORIGINS = [
+    "http://127.0.0.1:5005",
+    "http://localhost:5005",
+    "http://127.0.0.1:3003",
+    "http://localhost:3003",
+    "null",  # file:// origin serialized by some Electron shells
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # TODO: restrict to localhost in production
+    allow_origins=_LOCAL_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

@@ -11,7 +11,7 @@ from .plugins_router import router as plugins_router
 from .chat_router import router as chat_router
 from .metrics_router import router as metrics_router
 from .logs_router import router as logs_router
-from .router_router import router as router_router
+from .routing_router import router as routing_router
 
 __all__ = [
     "config_router",
@@ -20,5 +20,5 @@ __all__ = [
     "chat_router",
     "metrics_router",
     "logs_router",
-    "router_router",
+    "routing_router",
 ]

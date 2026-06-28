@@ -146,7 +146,8 @@ class PluginLifecycleManager:
                 # Use powershell.exe to start llama-server.exe in a new detached process.
                 # This avoids sandbox restrictions that block CUDA init when started via Popen directly.
                 cmd_line = " ".join(f'"{arg}"' if " " in str(arg) else str(arg) for arg in command)
-                ps_cmd = f'Start-Process -FilePath "{command[0]}" -ArgumentList {",".join(f'"{a}"' for a in command[1:])} -PassThru'
+                args_csv = ",".join(f'"{a}"' for a in command[1:])
+                ps_cmd = f'Start-Process -FilePath "{command[0]}" -ArgumentList {args_csv} -PassThru'
 
                 print(f"[LIFECYCLE] Launching via powershell.exe: {ps_cmd}", flush=True)
 

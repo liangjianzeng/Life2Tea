@@ -29,7 +29,7 @@ dist/
 # Project
 log/
 *.log
-config/liangllm.json
+# life2tea.json holds local paths/ports — commit the .example template instead
 config/life2tea.json
 config/plugin_*.json
 config/profiles/
@@ -40,4 +40,3 @@ backends/
 # OS
 Thumbs.db
 Desktop.ini
-config/global.json

@@ -16,9 +16,10 @@ from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional, List, Dict
 
-from ..main import get_config_mgr, get_model_registry, get_lifecycle_mgr
+from ..main import get_config_mgr, get_model_registry, get_lifecycle_mgr, get_plugin_registry
 from ..plugins.model_registry import ModelRegistry
 from ..plugins.lifecycle import PluginLifecycleManager
+from ..plugins.registry import ModelInfoAdapter
 from ..core.config import ConfigManager
 
 
@@ -30,24 +31,55 @@ class LoadModelBody(BaseModel):
     port: Optional[int] = None
 
 
-@router.get("", summary="List all discovered models")
-async def list_models(registry: ModelRegistry = Depends(get_model_registry)):
-    return {"models": registry.list_models()}
+def _merge_plugin_models(legacy_models: List[Dict], plugin_registry) -> List[Dict]:
+    """Add model-type plugins not already present (by family) in the legacy list.
+
+    Plugin-backed models carry ``source: "plugin"`` so the frontend can tell
+    them apart from raw GGUFs (``source`` defaults to absent/"gguf").
+    """
+    if plugin_registry is None:
+        return legacy_models
+    seen = {m.get("family") for m in legacy_models}
+    out = list(legacy_models)
+    for desc in plugin_registry.list_plugins(type="model"):
+        if desc.errors:
+            continue
+        if desc.manifest.model and desc.manifest.model.model_family not in seen:
+            try:
+                out.append(ModelInfoAdapter.from_manifest(desc.manifest).to_dict())
+            except Exception:
+                continue
+    return out
+
+
+@router.get("", summary="List all discovered models (GGUFs + plugins)")
+async def list_models(
+    registry: ModelRegistry = Depends(get_model_registry),
+    plugin_registry=Depends(get_plugin_registry),
+):
+    models = _merge_plugin_models(registry.list_models(), plugin_registry)
+    return {"models": models}
 
 
 @router.post("/scan", summary="Re-scan models directory")
 async def scan_models(
     cfg_mgr: ConfigManager = Depends(get_config_mgr),
     registry: ModelRegistry = Depends(get_model_registry),
+    plugin_registry=Depends(get_plugin_registry),
 ):
     cfg = cfg_mgr.get_global()
     models_dir = cfg.get("models_dir", "")
     new_registry = ModelRegistry(models_dir)
     # Update app.state so future requests see the new registry
-    from fastapi import Request
     import app.main as main_mod
     main_mod.app.state.model_registry = new_registry
-    return {"models": new_registry.list_models()}
+    # Refresh the plugin registry too (new GGUFs become fallback descriptors)
+    if plugin_registry is not None:
+        plugin_registry.env["MODELS_DIR"] = models_dir
+        plugin_registry.discover_with_gguf_fallback(models_dir)
+        main_mod.app.state.plugin_registry = plugin_registry
+    models = _merge_plugin_models(new_registry.list_models(), plugin_registry)
+    return {"models": models}
 
 
 @router.get("/{family}", summary="Get model info")

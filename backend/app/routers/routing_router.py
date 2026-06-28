@@ -1,5 +1,5 @@
 """
-router_router.py — Router Rules API.
+routing_router.py — Router Rules API.
 
 Endpoints:
   GET    /api/router/rules       — Get current routing rules
@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 
-from ..core.router import SystemRouter
+from ..core.routing import SystemRouter
 
 router = APIRouter()
 
