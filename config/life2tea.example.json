@@ -35,5 +35,6 @@
     "ram_mb": 0,
     "cpu_cores": 0,
     "strategy": "evict_lru"
-  }
+  },
+  "api_keys": []
 }

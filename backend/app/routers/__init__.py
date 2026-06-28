@@ -12,6 +12,7 @@ from .chat_router import router as chat_router
 from .metrics_router import router as metrics_router
 from .logs_router import router as logs_router
 from .routing_router import router as routing_router
+from .api_keys_router import router as api_keys_router
 
 __all__ = [
     "config_router",
@@ -21,4 +22,5 @@ __all__ = [
     "metrics_router",
     "logs_router",
     "routing_router",
+    "api_keys_router",
 ]

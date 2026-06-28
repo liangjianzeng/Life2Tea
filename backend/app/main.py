@@ -172,10 +172,16 @@ async def lifespan(app: FastAPI):
                     f"{len(app.state.model_registry.list_models())} models, "
                     f"{n_plugins} plugin descriptors")
 
+    # ── Initialize API key manager ──
+    from app.core.api_keys import init_api_key_manager
+    init_api_key_manager(app.state.config_mgr)
+
     # ── Include routers after managers are initialized ──
     from app.routers import config_router, models_router, plugins_router
     from app.routers import chat_router, metrics_router, logs_router, routing_router
+    from app.routers import api_keys_router
 
+    app.include_router(api_keys_router, prefix="/api/keys", tags=["API Keys"])
     app.include_router(config_router, prefix="/api/config", tags=["Config"])
     app.include_router(models_router, prefix="/api/models", tags=["Models"])
     app.include_router(plugins_router, prefix="/api/plugins", tags=["Plugins"])
@@ -212,6 +218,11 @@ app = FastAPI(
 )
 
 # CORS — local desktop app only. Vite dev server (5005), Electron/Tauri
+
+# ── Add API Key middleware (before routers) ──
+# Must be added before lifespan runs (after app creation)
+from app.core.api_keys_middleware import ApiKeyMiddleware
+app.add_middleware(ApiKeyMiddleware)
 # (file://), and loopback origins are the legitimate clients.
 _LOCAL_ORIGINS = [
     "http://127.0.0.1:5005",
