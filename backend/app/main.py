@@ -176,10 +176,12 @@ async def lifespan(app: FastAPI):
     from app.core.api_keys import init_api_key_manager
     init_api_key_manager(app.state.config_mgr)
 
-    # ── Include routers after managers are initialized ──
+    # ── Add api_keys_router routes (after managers initialized) ──
+    _add_api_keys_routes()
+
+    # ── Include other routers after managers are initialized ──
     from app.routers import config_router, models_router, plugins_router
     from app.routers import chat_router, metrics_router, logs_router, routing_router
-    from app.routers import api_keys_router
 
     app.include_router(config_router, prefix="/api/config", tags=["Config"])
     app.include_router(models_router, prefix="/api/models", tags=["Models"])
@@ -199,6 +201,10 @@ async def lifespan(app: FastAPI):
                     print("  -", sr.path)
 
     logger.info("system", "Life2Tea backend started successfully")
+    
+    # Add api_keys_router routes after managers are initialized
+    _add_api_keys_routes()
+
     yield
 
     # ── Shutdown ───────────────────────────────────────
@@ -264,17 +270,38 @@ async def root():
 }
 
 
-# ── Add api_keys_router routes (must be after app creation) ─────────
-# Use add_api_route to work around FastAPI bug with empty path
-from app.routers import api_keys_router
-for route in api_keys_router.routes:
-    path = "/api/keys" + (route.path or "")
-    app.add_api_route(path, route.endpoint, methods=list(route.methods or []), tags=["API Keys"])
+# ── Add api_keys_router routes (after app.state is initialized) ──
+# Must be done after lifespan initializes config_mgr
+def _add_api_keys_routes():
+    """Add api_keys_router routes to app. Called during lifespan."""
+    from app.routers import api_keys_router
+    for route in api_keys_router.routes:
+        path = "/api/keys" + (route.path or "")
+        app.add_api_route(path, route.endpoint, methods=list(route.methods or []), tags=["API Keys"])
+
 
 # ── Server entry point ────────────────────────────────
 def start_server(host: str = "127.0.0.1", port: int = 3003):
     """Start the FastAPI server (blocking)."""
     uvicorn.run(app, host=host, port=port, log_level="info")
+
+
+# ── Add api_keys_router routes (after lifespan initializes app.state) ──
+# We add routes here as a fallback if lifespan didn't run
+def _ensure_api_keys_routes():
+    """Ensure api_keys_router routes are added to app."""
+    if not any(hasattr(r, 'path') and r.path == '/api/keys' for r in app.routes):
+        try:
+            from app.routers import api_keys_router
+            for route in api_keys_router.routes:
+                path = "/api/keys" + (route.path or "")
+                app.add_api_route(path, route.endpoint, methods=list(route.methods or []), tags=["API Keys"])
+        except Exception as e:
+            print(f"[WARN] Failed to add api_keys routes: {e}", flush=True)
+
+
+# Call it now (may fail if api_keys_router dependencies not available)
+_ensure_api_keys_routes()
 
 
 if __name__ == "__main__":

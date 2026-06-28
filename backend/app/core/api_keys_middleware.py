@@ -10,11 +10,9 @@ Usage in FastAPI:
     app.add_middleware(ApiKeyMiddleware)
 """
 
-from fastapi import Request, Response, HTTPException
+from fastapi import Request
 from fastapi.responses import JSONResponse
 from typing import Optional
-
-from .api_keys import ApiKey, Scope, get_api_key_manager
 
 
 class ApiKeyMiddleware:
@@ -27,7 +25,6 @@ class ApiKeyMiddleware:
         "/health",
         "/api/health",
         "/api/models",  # Allow read-only for unauthenticated users
-        "/api/keys",  # Allow POST /api/keys to create first key
     }
 
     def __init__(self, app):
@@ -42,22 +39,23 @@ class ApiKeyMiddleware:
         path = request.url.path
         method = scope.get("method", "GET")
 
-        # Skip auth for excluded paths (except POST /api/keys which needs auth after first key)
-        if path in self.EXCLUDE_PATHS and method != "POST":
+        # Skip auth for excluded paths
+        if any(path.startswith(excl) for excl in self.EXCLUDE_PATHS):
             await self.app(scope, receive, send)
             return
 
         # POST /api/keys is allowed for key creation (first key)
         if path == "/api/keys" and method == "POST":
-            # Only if no keys exist yet (no auth required)
+            # Allow key creation if manager not initialized or no keys exist
             try:
+                from .api_keys import get_api_key_manager
                 manager = get_api_key_manager()
-                if not manager.list_keys():
-                    # No keys yet - allow key creation without auth
+                if manager is None or not manager.list_keys():
                     await self.app(scope, receive, send)
                     return
             except Exception:
-                pass  # If manager not initialized, allow
+                await self.app(scope, receive, send)
+                return
 
         # Validate API key for all other requests
         auth_header = request.headers.get("Authorization", "")
@@ -80,7 +78,7 @@ class ApiKeyMiddleware:
                 status_code=403,
                 content={
                     "error": "forbidden",
-                    "message": f"Insufficient scopes. Required: {self._get_required_scopes(path)}",
+                    "message": "Insufficient scopes.",
                 },
             )
             await response(scope, receive, send)
@@ -92,47 +90,42 @@ class ApiKeyMiddleware:
         # Continue with request
         await self.app(scope, receive, send)
 
-    def _validate_key(self, auth_header: str, path: str) -> Optional[ApiKey]:
+    def _validate_key(self, auth_header: str, path: str) -> Optional["ApiKey"]:
         """Validate API key and return the ApiKey object if valid."""
         if not auth_header.startswith("Bearer "):
-            # Allow without key for read-only endpoints
-            if path in {"/api/models", "/api/models/scan"}:
-                return None
             return None
 
         try:
+            from .api_keys import get_api_key_manager
             manager = get_api_key_manager()
             return manager.verify_key(auth_header)
         except Exception:
             return None
 
-    def _check_scopes(self, key: ApiKey, path: str) -> bool:
+    def _check_scopes(self, key: "ApiKey", path: str) -> bool:
         """Check if key has sufficient scopes for the endpoint."""
         required = self._get_required_scopes(path)
 
         if not required:
-            return True  # No scope required
+            return True
 
         key_scopes = set(key.scopes)
         return any(req in key_scopes for req in required)
 
     def _get_required_scopes(self, path: str) -> list:
         """Determine required scopes for a given path."""
-        # Admin endpoints
         if path.startswith("/api/keys"):
+            from .api_keys import Scope
             return [Scope.ADMIN]
-
-        # Chat endpoints
         if path.startswith("/api/chat"):
+            from .api_keys import Scope
             return [Scope.CHAT]
-
-        # Model management endpoints
         if path.startswith("/api/models") and path != "/api/models":
+            from .api_keys import Scope
             if "load" in path or "unload" in path:
                 return [Scope.MODELS_WRITE]
             return [Scope.MODELS_READ]
-
-        return []  # No scope required for public endpoints
+        return []
 
 
 __all__ = ["ApiKeyMiddleware"]
