@@ -125,12 +125,15 @@ async def load_model(
     registry: ModelRegistry = Depends(get_model_registry),
     lifecycle: PluginLifecycleManager = Depends(get_lifecycle_mgr),
 ):
-    """Start llama-server with the specified model."""
+    """Start llama-server with the specified model (fully automated)."""
     print(f"[load_model] ENTRY: family={family}, body={body}", flush=True)
     cfg = cfg_mgr.get_global()
     info = registry.get_model(family)
     if not info:
         raise HTTPException(status_code=404, detail="Model not found")
+
+    # Determine port
+    port = body.port if body and body.port else cfg.get("default_port_range", [8080, 8099])[0]
 
     # Find backend
     from ..plugins.backend_registry import detect_backend
@@ -142,54 +145,61 @@ async def load_model(
     if not backend.available or not backend.server_path:
         raise HTTPException(status_code=500, detail="No backend available")
 
-    # Build command (for reference only, we don't start the process)
+    # Build command
     params = registry.get_default_params(family)
     params["ngl"] = cfg.get("gpu_layers", params["ngl"])
     params["ctx"] = cfg.get("ctx_size", params.get("ctx", 32768))
-    port = body.port if body and body.port else cfg.get("default_port_range", [8080, 8099])[0]
     args = registry.build_server_args(family, params, backend.server_path)
 
-    # Check if llama-server.exe is already running (manually started by user)
+    # Check if already running
     try:
         import subprocess, psutil
         result = subprocess.run(
             ["netstat", "-ano"],
             capture_output=True, text=True, timeout=5,
         )
-        pid_running = None
         for line in result.stdout.split("\n"):
             if "LISTENING" in line.upper() and f":{port} " in line:
                 parts = line.split()
                 if len(parts) >= 5:
                     pid_running = parts[-1].strip()
-                    break
-        if pid_running:
-            try:
-                proc = psutil.Process(int(pid_running))
-                if "llama-server" in proc.name().lower():
-                    # Already running! Return success
-                    from ..plugins.lifecycle import PluginStatus, PluginInstance
-                    inst = lifecycle.get_instance(family)
-                    if not inst:
-                        inst = PluginInstance(
-                            plugin_name=family,
-                            plugin_type="model",
-                            pid=int(pid_running),
-                            process=None,
-                            port=port,
-                            status=PluginStatus.RUNNING,
-                            health_endpoint="/health",
-                        )
-                        lifecycle._instances[family] = inst
-                    return {"ok": True, "instance": inst.to_dict(), "note": "Already running (manually started)"}
-            except Exception:
-                pass
+                    try:
+                        proc = psutil.Process(int(pid_running))
+                        if "llama-server" in proc.name().lower():
+                            from ..plugins.lifecycle import PluginStatus, PluginInstance
+                            inst = lifecycle.get_instance(family)
+                            if not inst:
+                                inst = PluginInstance(
+                                    plugin_name=family,
+                                    plugin_type="model",
+                                    pid=int(pid_running),
+                                    process=None,
+                                    port=port,
+                                    status=PluginStatus.RUNNING,
+                                    health_endpoint="/health",
+                                )
+                                lifecycle._instances[family] = inst
+                            return {"ok": True, "instance": inst.to_dict(), "note": "Already running (port in use)"}
+                    except Exception:
+                        pass
     except Exception as e:
         print(f"[load_model] Error checking process: {e}", flush=True)
 
-    # Not running - ask user to manually start it
-    return {
-        "ok": False,
-        "error": "llama-server.exe is not running. Please manually start it using start_llm2.bat in the project root.",
-        "help": "Run: E:\\DTXY\\Life2Tea\\start_llm2.bat",
-    }
+    # Not running — start it automatically using lifecycle manager
+    print(f"[load_model] Starting model on port {port}", flush=True)
+    try:
+        instance = lifecycle.start_plugin(
+            plugin_name=family,
+            plugin_type="model",
+            command=args,
+            host=cfg.get("default_host", "127.0.0.1"),
+            port=port,
+            health_endpoint="/health",
+        )
+        return {"ok": True, "instance": instance.to_dict()}
+    except Exception as e:
+        print(f"[load_model] Failed to start: {e}", flush=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to start model: {e}",
+        )
