@@ -102,6 +102,25 @@ async def get_model_params(
     return {"family": family, "params": params}
 
 
+@router.post("/{family}/unload", summary="Stop LLM backend for this model")
+async def unload_model(
+    family: str,
+    cfg_mgr: ConfigManager = Depends(get_config_mgr),
+    lifecycle: PluginLifecycleManager = Depends(get_lifecycle_mgr),
+):
+    """Stop the model plugin instance."""
+    print(f"[unload_model] ENTRY: family={family}", flush=True)
+    try:
+        lifecycle.stop_plugin(family)
+        return {"ok": True, "message": f"Model {family} stopped"}
+    except Exception as e:
+        print(f"[unload_model] Failed to stop: {e}", flush=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to stop model: {e}",
+        )
+
+
 @router.get("/backends", summary="List available LLM backends")
 async def list_backends(cfg_mgr: ConfigManager = Depends(get_config_mgr)):
     from ..plugins.backend_registry import list_all_available_backends
@@ -202,4 +221,22 @@ async def load_model(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to start model: {e}",
+        )
+
+
+@router.post("/{family}/unload", summary="Stop LLM backend for this model")
+async def unload_model(
+    family: str,
+    lifecycle: PluginLifecycleManager = Depends(get_lifecycle_mgr),
+):
+    """Stop the model plugin instance."""
+    print(f"[unload_model] ENTRY: family={family}", flush=True)
+    try:
+        lifecycle.stop_plugin(family)
+        return {"ok": True, "message": f"Model {family} stopped"}
+    except Exception as e:
+        print(f"[unload_model] Failed to stop: {e}", flush=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to stop model: {e}",
         )
