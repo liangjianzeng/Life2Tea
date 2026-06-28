@@ -7,6 +7,7 @@
         <router-link to="/models">{{ t("app.nav.models") }}</router-link>
         <router-link to="/plugins">{{ t("app.nav.plugins") }}</router-link>
         <router-link to="/settings">{{ t("app.nav.settings") }}</router-link>
+        <router-link to="/api-keys">{{ t("app.nav.apiKeys") }}</router-link>
       </nav>
       <button class="lang-btn" @click="toggle">{{ locale === 'zh-CN' ? 'EN' : '中文' }}</button>
     </header>
