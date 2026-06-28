@@ -27,6 +27,7 @@ class ApiKeyMiddleware:
         "/health",
         "/api/health",
         "/api/models",  # Allow read-only for unauthenticated users
+        "/api/keys",  # Allow POST /api/keys to create first key
     }
 
     def __init__(self, app):
@@ -39,13 +40,26 @@ class ApiKeyMiddleware:
 
         request = Request(scope)
         path = request.url.path
+        method = scope.get("method", "GET")
 
-        # Skip auth for excluded paths
-        if any(path.startswith(excl) for excl in self.EXCLUDE_PATHS):
+        # Skip auth for excluded paths (except POST /api/keys which needs auth after first key)
+        if path in self.EXCLUDE_PATHS and method != "POST":
             await self.app(scope, receive, send)
             return
 
-        # Validate API key
+        # POST /api/keys is allowed for key creation (first key)
+        if path == "/api/keys" and method == "POST":
+            # Only if no keys exist yet (no auth required)
+            try:
+                manager = get_api_key_manager()
+                if not manager.list_keys():
+                    # No keys yet - allow key creation without auth
+                    await self.app(scope, receive, send)
+                    return
+            except Exception:
+                pass  # If manager not initialized, allow
+
+        # Validate API key for all other requests
         auth_header = request.headers.get("Authorization", "")
         key = self._validate_key(auth_header, path)
 
