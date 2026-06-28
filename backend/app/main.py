@@ -181,7 +181,6 @@ async def lifespan(app: FastAPI):
     from app.routers import chat_router, metrics_router, logs_router, routing_router
     from app.routers import api_keys_router
 
-    app.include_router(api_keys_router, prefix="/api/keys", tags=["API Keys"])
     app.include_router(config_router, prefix="/api/config", tags=["Config"])
     app.include_router(models_router, prefix="/api/models", tags=["Models"])
     app.include_router(plugins_router, prefix="/api/plugins", tags=["Plugins"])
@@ -264,6 +263,13 @@ async def root():
     ],
 }
 
+
+# ── Add api_keys_router routes (must be after app creation) ─────────
+# Use add_api_route to work around FastAPI bug with empty path
+from app.routers import api_keys_router
+for route in api_keys_router.routes:
+    path = "/api/keys" + (route.path or "")
+    app.add_api_route(path, route.endpoint, methods=list(route.methods or []), tags=["API Keys"])
 
 # ── Server entry point ────────────────────────────────
 def start_server(host: str = "127.0.0.1", port: int = 3003):
