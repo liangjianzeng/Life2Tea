@@ -1,0 +1,90 @@
+========================================================================
+  Ollama Model Benchmark — DGX Spark
+  Base URL: http://127.0.0.1:11434
+========================================================================
+  API accessible, 3 models found
+
+────────────────────────────────────────────────────────────────────────
+  Model: qwen3.6:35b
+────────────────────────────────────────────────────────────────────────
+
+  Test: 短问答  (max_tokens=256)
+    tok/s: min=73.1  avg=74.4  max=75.0
+    time(s): min=3.80  avg=11.99  max=28.33
+      Run 1: 256tok / 28.33s = 73.1 tok/s
+      Run 2: 256tok / 3.83s = 75.0 tok/s
+      Run 3: 256tok / 3.8s = 75.0 tok/s
+
+  Test: 代码生成  (max_tokens=512)
+    tok/s: min=74.8  avg=74.8  max=74.8
+    time(s): min=7.24  avg=7.34  max=7.50
+      Run 1: 512tok / 7.5s = 74.8 tok/s
+      Run 2: 512tok / 7.29s = 74.8 tok/s
+      Run 3: 512tok / 7.24s = 74.8 tok/s
+
+  Test: 长文生成  (max_tokens=1024)
+    tok/s: min=73.7  avg=74.1  max=74.8
+    time(s): min=14.19  avg=14.23  max=14.27
+      Run 1: 1024tok / 14.19s = 74.8 tok/s
+      Run 2: 1024tok / 14.27s = 73.7 tok/s
+      Run 3: 1024tok / 14.23s = 73.9 tok/s
+
+────────────────────────────────────────────────────────────────────────
+  Model: qwen3-coder-next:latest
+────────────────────────────────────────────────────────────────────────
+
+  Test: 短问答  (max_tokens=256)
+    tok/s: min=46.5  avg=49.0  max=50.7
+    time(s): min=0.88  avg=17.86  max=51.74
+      Run 1: 32tok / 51.74s = 46.5 tok/s
+      Run 2: 32tok / 0.96s = 50.7 tok/s
+      Run 3: 32tok / 0.88s = 49.9 tok/s
+
+  Test: 代码生成  (max_tokens=512)
+    tok/s: min=48.8  avg=49.8  max=50.4
+    time(s): min=9.17  avg=9.38  max=9.79
+      Run 1: 448tok / 9.79s = 48.8 tok/s
+      Run 2: 448tok / 9.17s = 50.4 tok/s
+      Run 3: 448tok / 9.17s = 50.3 tok/s
+
+  Test: 长文生成  (max_tokens=1024)
+    tok/s: min=50.0  avg=50.2  max=50.4
+    time(s): min=8.27  avg=8.32  max=8.41
+      Run 1: 403tok / 8.41s = 50.0 tok/s
+      Run 2: 403tok / 8.27s = 50.4 tok/s
+      Run 3: 403tok / 8.27s = 50.2 tok/s
+
+────────────────────────────────────────────────────────────────────────
+  Model: glm-4.7-flash:latest
+────────────────────────────────────────────────────────────────────────
+
+  Test: 短问答  (max_tokens=256)
+    tok/s: min=66.5  avg=66.7  max=66.8
+    time(s): min=4.16  avg=7.39  max=13.85
+      Run 1: 256tok / 13.85s = 66.5 tok/s
+      Run 2: 256tok / 4.17s = 66.8 tok/s
+      Run 3: 256tok / 4.16s = 66.7 tok/s
+
+  Test: 代码生成  (max_tokens=512)
+    tok/s: min=66.0  avg=66.0  max=66.0
+    time(s): min=8.07  avg=8.1  max=8.13
+      Run 1: 512tok / 8.13s = 66.0 tok/s
+      Run 2: 512tok / 8.09s = 66.0 tok/s
+      Run 3: 512tok / 8.07s = 66.0 tok/s
+
+  Test: 长文生成  (max_tokens=1024)
+    tok/s: min=65.3  avg=65.3  max=65.4
+    time(s): min=16.00  avg=16.01  max=16.02
+      Run 1: 1024tok / 16.0s = 65.4 tok/s
+      Run 2: 1024tok / 16.0s = 65.3 tok/s
+      Run 3: 1024tok / 16.02s = 65.3 tok/s
+
+========================================================================
+  SUMMARY — Average tok/s (higher = better)
+========================================================================
+  Model                                     短问答     代码生成     长文生成
+  ────────────────────────────────────────────────────────────────────
+  qwen3.6:35b                               ERR      ERR      ERR
+  qwen3-coder-next:latest                   ERR      ERR      ERR
+  glm-4.7-flash:latest                      ERR      ERR      ERR
+

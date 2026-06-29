@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>DGX Spark Ollama 模型性能测试报告</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, 'Segoe UI', sans-serif; background: #0f1117; color: #e1e5eb; padding: 2rem; }
+  h1 { color: #a78bfa; font-size: 1.6rem; margin-bottom: .3rem; }
+  .subtitle { color: #8b8fa3; font-size: .9rem; margin-bottom: 2rem; }
+  .card { background: #1a1d27; border: 1px solid #2e3348; border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem; }
+  .card h2 { color: #c4b5fd; font-size: 1.1rem; margin-bottom: 1rem; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+  @media (max-width: 800px) { .grid2 { grid-template-columns: 1fr; } }
+  table { width: 100%; border-collapse: collapse; font-size: .85rem; }
+  th { background: #252836; color: #a78bfa; padding: .6rem .8rem; text-align: left; font-weight: 600; }
+  td { padding: .55rem .8rem; border-bottom: 1px solid #252836; }
+  tr:hover td { background: #1e2030; }
+  .badge-fast { color: #34d399; font-weight: 700; }
+  .badge-mid  { color: #fbbf24; font-weight: 700; }
+  .badge-slow { color: #f87171; font-weight: 700; }
+  .note { background: #252836; border-left: 3px solid #a78bfa; padding: .8rem 1rem; border-radius: 0 8px 8px 0; font-size: .85rem; color: #a0a4b8; margin-top: 1rem; }
+  .winner { color: #a78bfa; font-weight: 700; }
+  .section { color: #8b8fa3; font-size: .8rem; text-transform: uppercase; letter-spacing: .08em; margin: 1.5rem 0 .8rem; }
+</style>
+</head>
+<body>
+
+<h1>🚀 DGX Spark · Ollama 模型性能测试报告</h1>
+<p class="subtitle">测试时间：2026-06-27 &nbsp;|&nbsp; 后端：Ollama API (port 11434) &nbsp;|&nbsp; 服务器：<code>jianzengliang@100.81.83.59</code></p>
+
+<!-- 摘要卡片 -->
+<div class="grid2">
+  <div class="card">
+    <h2>📊 模型概况</h2>
+    <table>
+      <tr><th>模型</th><th>参数</th><th>量化</th><th>上下文</th><th>大小</th></tr>
+      <tr><td class="winner">qwen3.6:35b</td><td>36B</td><td>Q4_K_M</td><td>262K</td><td>23 GB</td></tr>
+      <tr><td>qwen3-coder-next</td><td>79.7B</td><td>Q4_K_M</td><td>262K</td><td>51 GB</td></tr>
+      <tr><td>glm-4.7-flash</td><td>29.9B</td><td>Q4_K_M</td><td>202K</td><td>19 GB</td></tr>
+    </table>
+  </div>
+  <div class="card">
+    <h2>🏆 性能排名（平均 tok/s）</h2>
+    <table>
+      <tr><th>排名</th><th>模型</th><th>短问答</th><th>代码生成</th><th>长文</th><th>平均</th></tr>
+      <tr><td>🥇</td><td class="winner">qwen3.6:35b</td><td class="badge-fast">74.4</td><td class="badge-fast">74.8</td><td class="badge-fast">74.1</td><td class="badge-fast">74.4</td></tr>
+      <tr><td>🥈</td><td>glm-4.7-flash</td><td class="badge-mid">66.7</td><td class="badge-mid">66.0</td><td class="badge-mid">65.3</td><td class="badge-mid">65.5</td></tr>
+      <tr><td>🥉</td><td>qwen3-coder-next</td><td class="badge-slow">49.0</td><td class="badge-mid">49.8</td><td class="badge-mid">50.2</td><td class="badge-slow">49.7</td></tr>
+    </table>
+  </div>
+</div>
+
+<!-- 图表 -->
+<div class="grid2">
+  <div class="card">
+    <h2>📈 平均吞吐量对比（tok/s）</h2>
+    <canvas id="chartThroughput"></canvas>
+  </div>
+  <div class="card">
+    <h2>⏱️ 平均响应时间（秒）</h2>
+    <canvas id="chartTime"></canvas>
+  </div>
+</div>
+
+<div class="card">
+  <h2>📋 详细测试结果</h2>
+
+  <p class="section">qwen3.6:35b — 平均 74.4 tok/s（最快）</p>
+  <table>
+    <tr><th>测试项</th><th>Run 1</th><th>Run 2</th><th>Run 3</th><th>平均 tok/s</th><th>平均时间(s)</th></tr>
+    <tr><td>短问答 (256 tok)</td><td>73.1</td><td>75.0</td><td>75.0</td><td class="badge-fast">74.4</td><td>11.99</td></tr>
+    <tr><td>代码生成 (512 tok)</td><td>74.8</td><td>74.8</td><td>74.8</td><td class="badge-fast">74.8</td><td>7.34</td></tr>
+    <tr><td>长文生成 (1024 tok)</td><td>74.8</td><td>73.7</td><td>73.9</td><td class="badge-fast">74.1</td><td>14.23</td></tr>
+  </table>
+
+  <p class="section">qwen3-coder-next:latest — 平均 49.7 tok/s</p>
+  <table>
+    <tr><th>测试项</th><th>Run 1</th><th>Run 2</th><th>Run 3</th><th>平均 tok/s</th><th>平均时间(s)</th></tr>
+    <tr><td>短问答 (32 tok)</td><td>46.5</td><td>50.7</td><td>49.9</td><td class="badge-slow">49.0</td><td>17.86</td></tr>
+    <tr><td>代码生成 (448 tok)</td><td>48.8</td><td>50.4</td><td>50.3</td><td class="badge-mid">49.8</td><td>9.38</td></tr>
+    <tr><td>长文生成 (403 tok)</td><td>50.0</td><td>50.4</td><td>50.2</td><td class="badge-mid">50.2</td><td>8.32</td></tr>
+  </table>
+  <p class="note">⚠️ 短问答实际只生成 32 tokens（模型自行判断停止），因此吞吐率仅供参考。首次运行含模型加载时间（51.74s），第 2-3 次为热启动。</p>
+
+  <p class="section">glm-4.7-flash:latest — 平均 65.5 tok/s</p>
+  <table>
+    <tr><th>测试项</th><th>Run 1</th><th>Run 2</th><th>Run 3</th><th>平均 tok/s</th><th>平均时间(s)</th></tr>
+    <tr><td>短问答 (256 tok)</td><td>66.5</td><td>66.8</td><td>66.7</td><td class="badge-mid">66.7</td><td>7.39</td></tr>
+    <tr><td>代码生成 (512 tok)</td><td>66.0</td><td>66.0</td><td>66.0</td><td class="badge-mid">66.0</td><td>8.10</td></tr>
+    <tr><td>长文生成 (1024 tok)</td><td>65.4</td><td>65.3</td><td>65.3</td><td class="badge-mid">65.3</td><td>16.01</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h2>🔍 分析结论</h2>
+  <table>
+    <tr><th>维度</th><th>结论</th></tr>
+    <tr><td>🏆 综合性能</td><td><strong>qwen3.6:35b 最优</strong>，平均 74.4 tok/s，是 coder-next 的 1.5×，且响应极稳定（三次运行几乎无波动）。</td></tr>
+    <tr><td>⚡ 推理速度</td><td>qwen3.6:35b > glm-4.7-flash > qwen3-coder-next。coder-next 参数最大（79.7B）但速度最慢，适合代码专项任务。</td></tr>
+    <tr><td>🔥 热启动</td><td>各模型第 2-3 次运行显著快于第 1 次（模型加载开销）。qwen3.6 热启动后稳定在 75 tok/s。</td></tr>
+    <tr><td>💾 显存占用</td><td>coder-next 最大（51 GB），glm-4.7-flash 最小（19 GB）。DGX Spark 可同时加载 2-3 个模型。</td></tr>
+    <tr><td>📝 代码任务</td><td>coder-next 专为代码优化，虽速度慢但代码质量预期更好。glm-4.7-flash 代码速度 66 tok/s，是速度更快的替代方案。</td></tr>
+  </table>
+  <p class="note">💡 建议：日常对话用 <strong>qwen3.6:35b</strong>（速度最快）；代码生成用 <strong>glm-4.7-flash</strong>（速度/质量平衡）；专项代码任务才用 coder-next（质量优先）。</p>
+</div>
+
+<script>
+const colors = {
+  qwen36:  '#a78bfa',
+  coder:   '#f87171',
+  glm:     '#34d399',
+  grid:    '#2e3348',
+  text:    '#e1e5eb',
+};
+
+new Chart(document.getElementById('chartThroughput'), {
+  type: 'bar',
+  data: {
+    labels: ['短问答', '代码生成', '长文生成'],
+    datasets: [
+      { label: 'qwen3.6:35b',  data: [74.4, 74.8, 74.1], backgroundColor: colors.qwen36 },
+      { label: 'glm-4.7-flash',   data: [66.7, 66.0, 65.3], backgroundColor: colors.glm },
+      { label: 'qwen3-coder-next', data: [49.0, 49.8, 50.2], backgroundColor: colors.coder },
+    ],
+  },
+  options: {
+    responsive: true,
+    plugins: {
+      legend: { labels: { color: colors.text } },
+    },
+    scales: {
+      x: { ticks: { color: colors.text }, grid: { color: colors.grid } },
+      y: { ticks: { color: colors.text }, grid: { color: colors.grid }, beginAtZero: true, title: { display: true, text: 'tok/s', color: colors.text } },
+    },
+  },
+});
+
+new Chart(document.getElementById('chartTime'), {
+  type: 'bar',
+  data: {
+    labels: ['短问答', '代码生成', '长文生成'],
+    datasets: [
+      { label: 'qwen3.6:35b',  data: [3.86, 7.38, 14.37],  backgroundColor: colors.qwen36 },
+      { label: 'glm-4.7-flash',   data: [4.16, 8.10, 16.01],  backgroundColor: colors.glm },
+      { label: 'qwen3-coder-next', data: [0.88, 9.14, 8.32],   backgroundColor: colors.coder },
+    ],
+  },
+  options: {
+    responsive: true,
+    plugins: {
+      legend: { labels: { color: colors.text } },
+    },
+    scales: {
+      x: { ticks: { color: colors.text }, grid: { color: colors.grid } },
+      y: { ticks: { color: colors.text }, grid: { color: colors.grid }, beginAtZero: true, title: { display: true, text: '秒', color: colors.text } },
+    },
+  },
+});
+</script>
+</body>
+</html>

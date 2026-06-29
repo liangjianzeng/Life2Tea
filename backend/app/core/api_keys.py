@@ -251,8 +251,22 @@ def get_api_key_manager() -> ApiKeyManager:
     """Get the global API key manager instance."""
     global _api_key_manager
     if _api_key_manager is None:
-        from ..main import get_config_mgr
-        _api_key_manager = ApiKeyManager(get_config_mgr())
+        try:
+            from ..main import get_config_mgr
+            _api_key_manager = ApiKeyManager(get_config_mgr())
+        except RuntimeError:
+            # ConfigManager not initialized (e.g. in tests, first start)
+            # Return a temporary in-memory manager
+            _api_key_manager = ApiKeyManager.__new__(ApiKeyManager)
+            _api_key_manager._keys = {}
+            _api_key_manager._key_to_id = {}
+            # Use a dummy config_mgr for save (doesn't persist)
+            class DummyConfigManager:
+                def get_global(self):
+                    return {"api_keys": []}
+                def update_global(self, cfg):
+                    pass
+            _api_key_manager.config_mgr = DummyConfigManager()
     return _api_key_manager
 
 
