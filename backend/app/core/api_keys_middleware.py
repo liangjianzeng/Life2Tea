@@ -59,18 +59,14 @@ class AuthMiddleware(BaseHTTPMiddleware):
         session_id = request.cookies.get("life2tea_session")
         print(f"[AuthMiddleware] session_id={session_id}", flush=True)
         if session_id:
-            try:
-                from app.core.user_service import get_user_service
-                user_service = get_user_service()
-                user = user_service.validate_session(session_id)
-                print(f"[AuthMiddleware] validated={user is not None} for {method} {path}", flush=True)
-                if user:
-                    request.state.current_user = user
-                    print(f"[AuthMiddleware] ALLOWED: {method} {path} (session)", flush=True)
-                    return await call_next(request)
-            except Exception as e:
-                print(f"[AuthMiddleware] session validation error: {e} for {method} {path}", flush=True)
-                pass
+            from app.core.user_service import get_user_service
+            user_service = get_user_service()
+            user = user_service.validate_session(session_id)
+            print(f"[AuthMiddleware] validated={user is not None} for {method} {path}", flush=True)
+            if user:
+                request.state.current_user = user
+                print(f"[AuthMiddleware] ALLOWED: {method} {path} (session)", flush=True)
+                return await call_next(request)
 
         # Check for API Key (Bearer token)
         auth_header = request.headers.get("Authorization", "")
@@ -91,13 +87,10 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
         # Allow POST /api/keys for key creation (first key)
         if path == "/api/keys" and method == "POST":
-            try:
-                from app.core.api_keys import get_api_key_manager
-                manager = get_api_key_manager()
-                if not manager.list_keys():
-                    return await call_next(request)
-            except Exception:
-                pass
+            from app.core.api_keys import get_api_key_manager
+            manager = get_api_key_manager()
+            if not manager.list_keys():
+                return await call_next(request)
 
         # No auth — return 401
         return JSONResponse(

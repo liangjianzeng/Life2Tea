@@ -167,11 +167,11 @@ class StatsService:
             result = []
             for r in rows:
                 gpu = None
-                if r[6] is not None:
+                if r[4] is not None:
                     gpu = {
-                        "utilization": r[5],
-                        "memory_used": r[6],
-                        "memory_total": r[7],
+                        "utilization": r[4],
+                        "memory_used": r[5],
+                        "memory_total": r[6],
                     }
                 result.append({
                     "timestamp": r[0],
