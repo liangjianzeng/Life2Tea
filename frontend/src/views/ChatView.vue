@@ -46,6 +46,65 @@ const streamingContent = ref("");
 const selectedModel = ref<string | null>(null);
 const messagesContainer = ref<HTMLElement | null>(null);
 const inputRef = ref<HTMLTextAreaElement | null>(null);
+const currentConversationId = ref<string | null>(null);
+let conversationId: string | null = null;
+
+onMounted(async () => {
+  inputRef.value?.focus();
+  try {
+    const response = await fetch("/api/chat/conversations", { credentials: "include" });
+    if (response.ok) {
+      const data = await response.json();
+      if (data.conversations && data.conversations.length > 0) {
+        // Load the most recent conversation
+        const latestConv = data.conversations[0];
+        conversationId = latestConv.id;
+        const convResponse = await fetch(`/api/chat/conversation/${conversationId}`, { credentials: "include" });
+        if (convResponse.ok) {
+          const convData = await convResponse.json();
+          messages.value = convData.messages.map((m: any) => ({
+            role: m.role,
+            content: m.content,
+          }));
+        }
+      }
+    }
+  } catch (e) {
+    // Create new conversation
+    conversationId = null;
+  }
+});
+
+async function saveMessage(role: string, content: string) {
+  if (!conversationId) {
+    // Create new conversation
+    const createResponse = await fetch("/api/chat/conversation", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: content.substring(0, 50),
+        model_family: selectedModel.value || undefined,
+      }),
+      credentials: "include",
+    });
+    if (createResponse.ok) {
+      const data = await createResponse.json();
+      conversationId = data.conversation.id;
+    }
+  }
+  if (conversationId) {
+    await fetch("/api/chat/message", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        conversation_id: conversationId,
+        role,
+        content,
+      }),
+      credentials: "include",
+    });
+  }
+}
 
 async function sendMessage() {
   const text = inputMessage.value.trim();
@@ -55,6 +114,9 @@ async function sendMessage() {
   inputMessage.value = "";
   loading.value = true;
   streamingContent.value = "";
+
+  // Save user message to database
+  await saveMessage("user", text);
 
   await nextTick();
   scrollToBottom();
@@ -68,6 +130,7 @@ async function sendMessage() {
         stream: true,
         max_tokens: 2048,
       }),
+      credentials: "include",
     });
 
     if (!response.ok) {
@@ -108,11 +171,16 @@ async function sendMessage() {
 
     messages.value.push({ role: "assistant", content: streamingContent.value });
     streamingContent.value = "";
+
+    // Save assistant message to database
+    await saveMessage("assistant", messages.value[messages.value.length - 1].content);
   } catch (error: any) {
     messages.value.push({
       role: "assistant",
       content: t("chat.error", { msg: error.message || t("chat.error", { msg: "Failed to send message" }) }),
     });
+    // Save error message
+    await saveMessage("assistant", messages.value[messages.value.length - 1].content);
   } finally {
     loading.value = false;
     await nextTick();

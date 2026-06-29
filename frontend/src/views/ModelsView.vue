@@ -36,6 +36,9 @@
           >
             {{ loadingModel === m.family ? t("models.unloading") : t("models.unload") }}
           </button>
+          <button @click="showConfig(m)" class="btn-config">
+            ⚙️ 配置
+          </button>
         </div>
       </div>
     </div>
@@ -43,6 +46,140 @@
     <div v-else class="empty-state">
       <p>{{ t("models.none") }}</p>
       <p class="hint">{{ t("models.hint", { path: "`models_dir`" }) }}</p>
+    </div>
+
+    <!-- Model Config Modal -->
+    <div v-if="showConfigModal" class="modal-overlay" @click.self="closeConfig">
+      <div class="modal-content config-modal">
+        <div class="modal-header">
+          <h3>{{ t("models.configTitle", { model: selectedModel?.display }) }}</h3>
+          <button class="modal-close" @click="closeConfig">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="config-section">
+            <h4>{{ t("models.configMemory") }}</h4>
+            <div class="form-group">
+              <label>{{ t("settings.labels.gpuLayers") }}</label>
+              <input v-model.number="modelConfig.gpu_layers" type="number" min="0" max="999" />
+            </div>
+            <div class="form-group">
+              <label>{{ t("settings.labels.ctxSize") }}</label>
+              <input v-model.number="modelConfig.ctx_size" type="number" min="512" max="131072" />
+            </div>
+            <div class="form-group">
+              <label>{{ t("settings.labels.threads") }}</label>
+              <input v-model.number="modelConfig.threads" type="number" min="1" max="32" />
+            </div>
+            <div class="form-group">
+              <label>{{ t("settings.labels.batchSize") }}</label>
+              <input v-model.number="modelConfig.batch_size" type="number" min="1" max="4096" />
+            </div>
+          </div>
+
+          <div class="config-section">
+            <h4>{{ t("models.configAdvanced") }}</h4>
+            <div class="form-group checkbox-group">
+              <label>
+                <input v-model="modelConfig.flash_attn" type="checkbox" />
+                {{ t("settings.options.flashAttn") }}
+              </label>
+            </div>
+            <div class="form-group checkbox-group">
+              <label>
+                <input v-model="modelConfig.cont_batching" type="checkbox" />
+                {{ t("settings.options.contBatching") }}
+              </label>
+            </div>
+            <div class="form-group checkbox-group">
+              <label>
+                <input v-model="modelConfig.mmap" type="checkbox" />
+                {{ t("settings.options.mmap") }}
+              </label>
+            </div>
+            <div class="form-group checkbox-group">
+              <label>
+                <input v-model="modelConfig.mlock" type="checkbox" />
+                {{ t("settings.options.mlock") }}
+              </label>
+            </div>
+          </div>
+
+          <div class="config-section">
+            <h4>{{ t("models.configMTP") }}</h4>
+            <div class="mtp-description">
+              <p>{{ t("models.mtpDescription") }}</p>
+            </div>
+            <div class="form-group checkbox-group">
+              <label>
+                <input v-model="modelConfig.mtp_enabled" type="checkbox" />
+                {{ t("models.mtpEnabled") }}
+              </label>
+            </div>
+            <div v-if="modelConfig.mtp_enabled" class="mtp-params">
+              <div class="form-group">
+                <label>{{ t("models.mtpPredictions") }}</label>
+                <input v-model.number="modelConfig.mtp_predictions" type="number" min="1" max="20" />
+                <span class="param-hint">{{ t("models.mtpPredictionsHint") }}</span>
+              </div>
+              <div class="form-group">
+                <label>{{ t("models.mtpMinTokens") }}</label>
+                <input v-model.number="modelConfig.mtp_min_tokens" type="number" min="0" max="1000" />
+                <span class="param-hint">{{ t("models.mtpMinTokensHint") }}</span>
+              </div>
+              <div class="form-group">
+                <label>{{ t("models.mtpTemp") }}</label>
+                <input v-model.number="modelConfig.mtp_temperature" type="number" min="0" max="2" step="0.1" />
+                <span class="param-hint">{{ t("models.mtpTempHint") }}</span>
+              </div>
+              <div class="form-group">
+                <label>{{ t("models.mtpProbThreshold") }}</label>
+                <input v-model.number="modelConfig.mtp_prob_threshold" type="number" min="0" max="1" step="0.01" />
+                <span class="param-hint">{{ t("models.mtpProbThresholdHint") }}</span>
+              </div>
+              <div class="form-group">
+                <label>{{ t("models.mtpParallel") }}</label>
+                <input v-model.number="modelConfig.mtp_parallel" type="number" min="1" max="8" />
+                <span class="param-hint">{{ t("models.mtpParallelHint") }}</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="config-section">
+            <h4>{{ t("models.configKVCache") }}</h4>
+            <div class="form-group">
+              <label>{{ t("models.configKVTypeK") }}</label>
+              <select v-model="modelConfig.cache_type_k">
+                <option value="f16">F16</option>
+                <option value="f32">F32</option>
+                <option value="q4_0">Q4_0</option>
+                <option value="q8_0">Q8_0</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>{{ t("models.configKVTypeV") }}</label>
+              <select v-model="modelConfig.cache_type_v">
+                <option value="f16">F16</option>
+                <option value="f32">F32</option>
+                <option value="q4_0">Q4_0</option>
+                <option value="q8_0">Q8_0</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="config-section">
+            <h4>{{ t("models.configPresets") }}</h4>
+            <div class="preset-buttons">
+              <button @click="applyPreset('lightweight')" class="btn-preset">{{ t("models.presetLightweight") }}</button>
+              <button @click="applyPreset('balanced')" class="btn-preset">{{ t("models.presetBalanced") }}</button>
+              <button @click="applyPreset('highPerformance')" class="btn-preset">{{ t("models.presetHighPerformance") }}</button>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-cancel" @click="closeConfig">{{ t("settings.picker.cancel") }}</button>
+          <button class="btn-save" @click="saveModelConfig">{{ t("settings.save") }}</button>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -74,11 +211,31 @@ interface Model {
 const models = ref<Model[]>([]);
 const scanning = ref(false);
 const loadingModel = ref<string | null>(null);
+const showConfigModal = ref(false);
+const selectedModel = ref<Model | null>(null);
+const modelConfig = ref<any>({
+  gpu_layers: 99,
+  ctx_size: 32768,
+  threads: 0,
+  batch_size: 1024,
+  flash_attn: false,
+  cont_batching: false,
+  mmap: true,
+  mlock: false,
+  cache_type_k: 'f16',
+  cache_type_v: 'f16',
+  mtp_enabled: false,
+  mtp_predictions: 4,
+  mtp_min_tokens: 0,
+  mtp_temperature: 1.0,
+  mtp_prob_threshold: 0.5,
+  mtp_parallel: 1,
+});
 
 async function scan() {
   scanning.value = true;
   try {
-    const res = await fetch("/api/models/scan", { method: "POST" });
+    const res = await fetch("/api/models/scan", { method: "POST", credentials: "include" });
     const data = await res.json();
     models.value = data.models || [];
   } catch (e) {
@@ -96,6 +253,7 @@ async function loadModel(m: Model) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ port }),
+      credentials: "include",
     });
     const data = await res.json();
     if (data.ok) {
@@ -117,6 +275,7 @@ async function unloadModel(m: Model) {
   try {
     const res = await fetch(`/api/models/${m.family}/unload`, {
       method: "POST",
+      credentials: "include",
     });
     const data = await res.json();
     if (data.ok) {
@@ -133,11 +292,128 @@ async function unloadModel(m: Model) {
 
 async function refresh() {
   try {
-    const res = await fetch("/api/models");
+    const res = await fetch("/api/models", { credentials: "include" });
     const data = await res.json();
     models.value = data.models || [];
+    // Debug: log instance status
+    console.log("Models with instance:", models.value.filter(m => m.instance));
   } catch (e) {
-    // Ignore
+    console.error("Failed to refresh models:", e);
+  }
+}
+
+function showConfig(m: Model) {
+  selectedModel.value = m;
+  showConfigModal.value = true;
+  
+  // Load existing config or use defaults
+  fetch(`/api/config/model-config/${encodeURIComponent(m.family)}`, { credentials: "include" })
+    .then(res => {
+      if (res.ok) {
+        return res.json();
+      } else {
+        return null;
+      }
+    })
+    .then(data => {
+      if (data && data.params) {
+        modelConfig.value = { ...modelConfig.value, ...data.params };
+      }
+    })
+    .catch(() => {
+      // Use defaults
+    });
+}
+
+function closeConfig() {
+  showConfigModal.value = false;
+  selectedModel.value = null;
+}
+
+async function saveModelConfig() {
+  if (!selectedModel.value) return;
+  
+  try {
+    const res = await fetch(`/api/config/model-config/${encodeURIComponent(selectedModel.value.family)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ params: modelConfig.value }),
+      credentials: "include",
+    });
+    
+    if (res.ok) {
+      closeConfig();
+      alert(t("models.configSaved"));
+    } else {
+      alert(t("models.configError"));
+    }
+  } catch (e) {
+    alert(t("models.configError"));
+  }
+}
+
+function applyPreset(preset: string) {
+  switch (preset) {
+    case 'lightweight':
+      modelConfig.value = {
+        gpu_layers: 20,
+        ctx_size: 4096,
+        threads: 4,
+        batch_size: 512,
+        flash_attn: false,
+        cont_batching: false,
+        mmap: true,
+        mlock: false,
+        cache_type_k: 'f16',
+        cache_type_v: 'f16',
+        mtp_enabled: false,
+        mtp_predictions: 2,
+        mtp_min_tokens: 0,
+        mtp_temperature: 1.0,
+        mtp_prob_threshold: 0.7,
+        mtp_parallel: 1,
+      };
+      break;
+    case 'balanced':
+      modelConfig.value = {
+        gpu_layers: 40,
+        ctx_size: 8192,
+        threads: 8,
+        batch_size: 1024,
+        flash_attn: true,
+        cont_batching: true,
+        mmap: true,
+        mlock: false,
+        cache_type_k: 'f16',
+        cache_type_v: 'f16',
+        mtp_enabled: true,
+        mtp_predictions: 4,
+        mtp_min_tokens: 0,
+        mtp_temperature: 0.8,
+        mtp_prob_threshold: 0.5,
+        mtp_parallel: 2,
+      };
+      break;
+    case 'highPerformance':
+      modelConfig.value = {
+        gpu_layers: 99,
+        ctx_size: 16384,
+        threads: 16,
+        batch_size: 2048,
+        flash_attn: true,
+        cont_batching: true,
+        mmap: true,
+        mlock: true,
+        cache_type_k: 'f32',
+        cache_type_v: 'f32',
+        mtp_enabled: true,
+        mtp_predictions: 8,
+        mtp_min_tokens: 0,
+        mtp_temperature: 0.6,
+        mtp_prob_threshold: 0.3,
+        mtp_parallel: 4,
+      };
+      break;
   }
 }
 
@@ -267,6 +543,196 @@ onMounted(scan);
   border-radius: 4px;
   cursor: pointer;
   font-size: 0.9em;
+}
+
+.btn-config {
+  padding: 6px 12px;
+  background: #534ab7;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9em;
+}
+
+.btn-config:hover {
+  background: #6b5cc4;
+}
+
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.config-modal {
+  width: 600px;
+  max-width: 90%;
+  max-height: 80vh;
+  overflow-y: auto;
+  background: #1a1a2e;
+  border: 1px solid #534ab7;
+  border-radius: 12px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
+}
+
+.config-section {
+  margin-bottom: 20px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid #2d2d4a;
+}
+
+.config-section:last-child {
+  border-bottom: none;
+}
+
+.config-section h4 {
+  margin: 0 0 12px 0;
+  color: #7c5cff;
+  font-size: 1em;
+}
+
+.form-group {
+  display: flex;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.form-group label {
+  min-width: 140px;
+  font-size: 0.85em;
+  color: #b0b0d0;
+}
+
+.form-group input[type="number"],
+.form-group select {
+  flex: 1;
+  max-width: 200px;
+  padding: 6px 10px;
+  background: #1a1a2e;
+  color: #e0e0ff;
+  border: 1px solid #2d2d4a;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+.form-group input:focus,
+.form-group select:focus {
+  outline: none;
+  border-color: #534ab7;
+}
+
+.checkbox-group {
+  display: flex;
+  align-items: center;
+}
+
+.checkbox-group label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  min-width: auto;
+}
+
+.checkbox-group input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.preset-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.mtp-description {
+  margin-bottom: 15px;
+  padding: 10px;
+  background: #1a1a2e;
+  border: 1px solid #2d2d4a;
+  border-radius: 4px;
+}
+
+.mtp-description p {
+  margin: 0;
+  font-size: 0.85em;
+  color: #a0a0c0;
+  line-height: 1.4;
+}
+
+.mtp-params {
+  margin-top: 15px;
+  padding-top: 15px;
+  border-top: 1px dashed #2d2d4a;
+}
+
+.param-hint {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.75em;
+  color: #666;
+  font-style: italic;
+}
+
+.btn-preset {
+  padding: 6px 12px;
+  background: #2d2d4a;
+  color: #7c5cff;
+  border: 1px solid #534ab7;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85em;
+}
+
+.btn-preset:hover {
+  background: #3d3d5a;
+  color: #9d7fff;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 16px 0 0 0;
+  border-top: 1px solid #2d2d4a;
+  margin-top: 20px;
+}
+
+.btn-cancel {
+  padding: 8px 16px;
+  background: #2d2d4a;
+  color: #e0e0ff;
+  border: 1px solid #534ab7;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9em;
+}
+
+.btn-cancel:hover {
+  background: #3d3d5a;
+}
+
+.btn-save {
+  padding: 8px 16px;
+  background: #534ab7;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9em;
+}
+
+.btn-save:hover {
+  background: #6b5cc4;
 }
 
 .btn-unload:disabled {

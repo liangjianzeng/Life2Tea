@@ -110,6 +110,39 @@ class ConfigManager:
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
 
+    # ── Model-Specific Config ─────────────────────────────────
+
+    def get_model_config(self, model_filename: str) -> Optional[dict]:
+        """Get configuration for a specific model file."""
+        return self.get_plugin_config(f"model_{model_filename}")
+
+    def save_model_config(self, model_filename: str, params: dict):
+        """Save configuration for a specific model file."""
+        self.save_plugin_config(f"model_{model_filename}", params)
+
+    def delete_model_config(self, model_filename: str) -> bool:
+        """Delete configuration for a specific model file."""
+        return self.delete_plugin_config(f"model_{model_filename}")
+
+    def list_model_configs(self) -> List[dict]:
+        """List all model-specific configurations."""
+        model_configs = []
+        if not os.path.isdir(self._config_dir):
+            return model_configs
+
+        with self._lock:
+            for fname in os.listdir(self._config_dir):
+                if fname.startswith("model_") and fname.endswith(".json"):
+                    model_name = fname[6:-5]  # Remove "model_" prefix and ".json" suffix
+                    config = self.get_model_config(model_name)
+                    if config:
+                        model_configs.append({
+                            "model": model_name,
+                            "params": config.get("params", {}),
+                            "updated_at": config.get("_updated_at", ""),
+                        })
+        return model_configs
+
     def delete_plugin_config(self, plugin_name: str) -> bool:
         path = self._plugin_config_path(plugin_name)
         if not os.path.isfile(path):

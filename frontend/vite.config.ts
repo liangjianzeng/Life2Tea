@@ -23,5 +23,15 @@ export default defineConfig(({ mode }) => {
         },
       },
     },
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            echarts: ["echarts"],
+            vueVendor: ["vue", "vue-router", "vue-i18n", "pinia"],
+          },
+        },
+      },
+    },
   };
 });

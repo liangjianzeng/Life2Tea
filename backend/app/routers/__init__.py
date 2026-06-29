@@ -13,6 +13,7 @@ from .metrics_router import router as metrics_router
 from .logs_router import router as logs_router
 from .routing_router import router as routing_router
 from .api_keys_router import router as api_keys_router
+from .auth_router import router as auth_router
 
 __all__ = [
     "config_router",

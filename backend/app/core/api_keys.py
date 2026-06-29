@@ -1,10 +1,10 @@
 """
-api_keys.py — API Key management module.
+api_keys.py — API Key management with SQLite persistence.
 
 Implements OpenAPI-style API key authentication:
   - Keys are UUID4 strings (128-bit random)
   - Each key has scopes, expiration, metadata
-  - Stored in memory (or persist to config/life2tea.json)
+  - Stored in SQLite database
 
 Security notes:
   - Keys are hashed before storage (using SHA256)
@@ -15,16 +15,14 @@ Security notes:
 import secrets
 import hashlib
 import time
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Optional
 
-import yaml
-
-from ..main import get_config_mgr
-from ..core.config import ConfigManager
+from ..core.database import Database, get_db
 
 
 class Scope(str, Enum):
@@ -40,14 +38,15 @@ class Scope(str, Enum):
 @dataclass
 class ApiKey:
     """API key with metadata."""
-    id: str                           # UUID4 string (not hashed)
-    hashed_key: str                   # SHA256 hash of key
-    name: str                         # User-friendly name
-    scopes: List[Scope]               # Permissions
-    created_at: float                 # Unix timestamp
-    expires_at: Optional[float] = None  # Unix timestamp (None = never)
-    last_used_at: Optional[float] = None  # Last usage timestamp
-    revoked: bool = False             # If True, key is disabled
+    id: str
+    hashed_key: str
+    name: str
+    scopes: List[Scope]
+    created_at: float
+    expires_at: Optional[float] = None
+    last_used_at: Optional[float] = None
+    revoked: bool = False
+    owner_id: Optional[str] = None
 
     @property
     def is_expired(self) -> bool:
@@ -67,21 +66,23 @@ class ApiKey:
         name: str,
         scopes: List[Scope],
         expires_in_days: Optional[int] = None,
+        owner_id: Optional[str] = None,
     ) -> "ApiKey":
         """Create a new API key."""
-        key = secrets.token_hex(16)  # 32-char hex string
+        key = secrets.token_hex(16)
         hashed = hashlib.sha256(key.encode()).hexdigest()
 
         now = time.time()
         expires = now + expires_in_days * 86400 if expires_in_days else None
 
         return cls(
-            id=secrets.token_hex(8),  # 16-char ID
+            id=secrets.token_hex(8),
             hashed_key=hashed,
             name=name,
             scopes=scopes,
             created_at=now,
             expires_at=expires,
+            owner_id=owner_id,
         )
 
     def to_dict(self, include_plain_key: bool = False) -> dict:
@@ -101,128 +102,158 @@ class ApiKey:
             ),
             "remaining_days": self.remaining_days,
             "revoked": self.revoked,
+            "owner_id": self.owner_id,
         }
         if include_plain_key:
-            data["key"] = self.hashed_key  # Note: This is the *hash*, not plain key
+            data["key"] = self.hashed_key
         return data
 
 
 class ApiKeyManager:
-    """Manages API keys in memory with optional config persistence."""
+    """Manages API keys in SQLite."""
 
-    def __init__(self, config_mgr: ConfigManager):
-        self.config_mgr = config_mgr
-        self._keys: Dict[str, ApiKey] = {}  # id -> ApiKey
-        self._key_to_id: Dict[str, str] = {}  # hashed_key -> id
-        self._load()
+    def __init__(self, db: Database):
+        self.db = db
 
-    def _load(self):
-        """Load keys from config."""
-        cfg = self.config_mgr.get_global()
-        keys_data = cfg.get("api_keys", [])
+    def _key_to_row(self, key: ApiKey) -> dict:
+        """Convert ApiKey to database row dict."""
+        return {
+            "id": key.id,
+            "name": key.name,
+            "hashed_key": key.hashed_key,
+            "scopes": json.dumps([s.value for s in key.scopes]),
+            "created_at": key.created_at,
+            "expires_at": key.expires_at,
+            "last_used_at": key.last_used_at,
+            "revoked": 1 if key.revoked else 0,
+            "owner_id": key.owner_id,
+        }
 
-        for data in keys_data:
-            try:
-                key = ApiKey(
-                    id=data["id"],
-                    hashed_key=data["hashed_key"],
-                    name=data["name"],
-                    scopes=[Scope(s) for s in data.get("scopes", [])],
-                    created_at=data["created_at"],
-                    expires_at=data.get("expires_at"),
-                    last_used_at=data.get("last_used_at"),
-                    revoked=data.get("revoked", False),
-                )
-                self._keys[key.id] = key
-                self._key_to_id[key.hashed_key] = key.id
-            except Exception as e:
-                print(f"Warning: Failed to load API key: {e}")
-
-    def _save(self):
-        """Persist keys to config."""
-        keys_data = []
-        for key in self._keys.values():
-            keys_data.append({
-                "id": key.id,
-                "hashed_key": key.hashed_key,
-                "name": key.name,
-                "scopes": [s.value for s in key.scopes],
-                "created_at": key.created_at,
-                "expires_at": key.expires_at,
-                "last_used_at": key.last_used_at,
-                "revoked": key.revoked,
-            })
-        cfg = self.config_mgr.get_global()
-        cfg["api_keys"] = keys_data
-        self.config_mgr.update_global(cfg)
+    def _row_to_key(self, row) -> ApiKey:
+        """Convert database row to ApiKey."""
+        return ApiKey(
+            id=row["id"],
+            hashed_key=row["hashed_key"],
+            name=row["name"],
+            scopes=[Scope(s) for s in json.loads(row["scopes"])],
+            created_at=row["created_at"],
+            expires_at=row["expires_at"],
+            last_used_at=row["last_used_at"],
+            revoked=bool(row["revoked"]),
+            owner_id=row["owner_id"],
+        )
 
     def generate_key(
         self,
         name: str,
         scopes: List[Scope],
         expires_in_days: Optional[int] = None,
+        owner_id: Optional[str] = None,
     ) -> tuple[str, ApiKey]:
-        """Generate a new API key. Returns (plain_key, api_key_obj).
-
-        IMPORTANT: The plain key should only be shown once!
-        """
-        key_obj = ApiKey.create(name, scopes, expires_in_days)
+        """Generate a new API key. Returns (plain_key, api_key_obj)."""
+        key_obj = ApiKey.create(name, scopes, expires_in_days, owner_id)
         plain_key = hashlib.sha256(key_obj.hashed_key.encode()).hexdigest()
 
-        self._keys[key_obj.id] = key_obj
-        self._key_to_id[key_obj.hashed_key] = key_obj.id
-        self._save()
-
-        return plain_key, key_obj
+        conn = self.db.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO api_keys (id, name, hashed_key, scopes, created_at, expires_at, last_used_at, revoked, owner_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, NULL, 0, ?)",
+                (
+                    key_obj.id,
+                    key_obj.name,
+                    key_obj.hashed_key,
+                    json.dumps([s.value for s in key_obj.scopes]),
+                    key_obj.created_at,
+                    key_obj.expires_at,
+                    key_obj.owner_id,
+                ),
+            )
+            conn.commit()
+            return plain_key, key_obj
+        finally:
+            conn.close()
 
     def get_key_by_id(self, key_id: str) -> Optional[ApiKey]:
         """Get key by ID."""
-        return self._keys.get(key_id)
+        conn = self.db.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM api_keys WHERE id = ?", (key_id,))
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            return self._row_to_key(row)
+        finally:
+            conn.close()
 
     def get_key_by_hash(self, hashed_key: str) -> Optional[ApiKey]:
         """Get key by hashed value."""
-        key_id = self._key_to_id.get(hashed_key)
-        return self._keys.get(key_id) if key_id else None
+        conn = self.db.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM api_keys WHERE hashed_key = ?", (hashed_key,))
+            row = cursor.fetchone()
+            if row is None:
+                return None
+            return self._row_to_key(row)
+        finally:
+            conn.close()
 
-    def list_keys(self) -> List[ApiKey]:
-        """List all keys."""
-        return list(self._keys.values())
+    def list_keys(self, owner_id: Optional[str] = None) -> List[ApiKey]:
+        """List all keys, optionally filtered by owner."""
+        conn = self.db.get_connection()
+        try:
+            cursor = conn.cursor()
+            if owner_id:
+                cursor.execute(
+                    "SELECT * FROM api_keys WHERE owner_id = ? ORDER BY created_at DESC",
+                    (owner_id,),
+                )
+            else:
+                cursor.execute("SELECT * FROM api_keys ORDER BY created_at DESC")
+            return [self._row_to_key(row) for row in cursor.fetchall()]
+        finally:
+            conn.close()
 
     def revoke_key(self, key_id: str) -> bool:
         """Revoke a key by ID."""
-        if key_id in self._keys:
-            self._keys[key_id].revoked = True
-            self._save()
-            return True
-        return False
+        conn = self.db.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE api_keys SET revoked = 1 WHERE id = ?", (key_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
 
     def delete_key(self, key_id: str) -> bool:
         """Delete a key permanently."""
-        if key_id in self._keys:
-            key = self._keys.pop(key_id)
-            self._key_to_id.pop(key.hashed_key, None)
-            self._save()
-            return True
-        return False
+        conn = self.db.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM api_keys WHERE id = ?", (key_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+        finally:
+            conn.close()
 
     def verify_key(self, authorization_header: str) -> Optional[ApiKey]:
         """Verify API key from Authorization header.
 
         Expected format: "Bearer <hashed_key>"
-
-        Returns the ApiKey if valid, None otherwise.
         """
         if not authorization_header.startswith("Bearer "):
             return None
 
         provided_hash = authorization_header[7:].strip()
 
-        # Check if it's a valid hash (64 hex chars)
         if len(provided_hash) != 64:
             return None
 
         try:
-            int(provided_hash, 16)  # Validate hex
+            int(provided_hash, 16)
         except ValueError:
             return None
 
@@ -238,12 +269,21 @@ class ApiKeyManager:
 
         # Update last used time
         key.last_used_at = time.time()
-        self._save()
+        conn = self.db.get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE api_keys SET last_used_at = ? WHERE id = ?",
+                (key.last_used_at, key.id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
         return key
 
 
-# Global singleton (will be initialized in main.py)
+# Global instance
 _api_key_manager: Optional[ApiKeyManager] = None
 
 
@@ -251,29 +291,15 @@ def get_api_key_manager() -> ApiKeyManager:
     """Get the global API key manager instance."""
     global _api_key_manager
     if _api_key_manager is None:
-        try:
-            from ..main import get_config_mgr
-            _api_key_manager = ApiKeyManager(get_config_mgr())
-        except RuntimeError:
-            # ConfigManager not initialized (e.g. in tests, first start)
-            # Return a temporary in-memory manager
-            _api_key_manager = ApiKeyManager.__new__(ApiKeyManager)
-            _api_key_manager._keys = {}
-            _api_key_manager._key_to_id = {}
-            # Use a dummy config_mgr for save (doesn't persist)
-            class DummyConfigManager:
-                def get_global(self):
-                    return {"api_keys": []}
-                def update_global(self, cfg):
-                    pass
-            _api_key_manager.config_mgr = DummyConfigManager()
+        raise RuntimeError("ApiKeyManager not initialized")
     return _api_key_manager
 
 
-def init_api_key_manager(config_mgr: ConfigManager):
+def init_api_key_manager(db: Database) -> ApiKeyManager:
     """Initialize the global API key manager."""
     global _api_key_manager
-    _api_key_manager = ApiKeyManager(config_mgr)
+    _api_key_manager = ApiKeyManager(db)
+    return _api_key_manager
 
 
 __all__ = [

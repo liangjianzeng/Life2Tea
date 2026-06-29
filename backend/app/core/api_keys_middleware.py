@@ -1,105 +1,112 @@
 """
-api_keys_middleware.py — API Key authentication middleware.
+api_keys_middleware.py — Authentication middleware.
+
+Supports two auth methods:
+1. API Key (Bearer token) — for programmatic access
+2. Session Cookie — for web UI access
 
 Validates API keys from the Authorization header:
   - Header format: "Authorization: Bearer <hashed_key>"
+  - Session cookie: "life2tea_session"
   - If no key or invalid key, returns 401 Unauthorized
   - If key has insufficient scopes, returns 403 Forbidden
-
-Usage in FastAPI:
-    app.add_middleware(ApiKeyMiddleware)
 """
 
+import json
 from fastapi import Request
 from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware, Response
 from typing import Optional
 
-# Lazy imports to avoid circular dependencies
-_api_keys_module = None
 
-
-def _get_api_keys_module():
-    global _api_keys_module
-    if _api_keys_module is None:
-        from . import api_keys as mod
-        _api_keys_module = mod
-    return _api_keys_module
-
-
-class ApiKeyMiddleware:
-    """Middleware to enforce API key authentication."""
+class AuthMiddleware(BaseHTTPMiddleware):
+    """Middleware to enforce authentication (API key or session cookie)."""
 
     EXCLUDE_PATHS = {
-        "/",
         "/docs",
         "/openapi.json",
         "/health",
         "/api/health",
-        "/api/models",  # Allow read-only for unauthenticated users
     }
 
-    def __init__(self, app):
-        self.app = app
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] != "http":
-            await self.app(scope, receive, send)
-            return
-
-        request = Request(scope)
+    async def dispatch(self, request: Request, call_next):
         path = request.url.path
-        method = scope.get("method", "GET")
+        method = request.method
 
-        # Skip auth for excluded paths
+        print(f"*** AuthMiddleware DISPATCH CALLED *** {method} {path}", flush=True)
+
+        # Skip auth for excluded paths and auth endpoints
         if any(path.startswith(excl) for excl in self.EXCLUDE_PATHS):
-            await self.app(scope, receive, send)
-            return
+            print(f"[AuthMiddleware] EXCLUDED: {path}", flush=True)
+            return await call_next(request)
 
-        # POST /api/keys is allowed for key creation (first key)
-        if path == "/api/keys" and method == "POST":
-            # Allow key creation if manager not initialized or no keys exist
+        # Allow auth endpoints
+        if path.startswith("/api/auth"):
+            print(f"[AuthMiddleware] AUTH ENDPOINT: {path}", flush=True)
+            return await call_next(request)
+
+        # Allow static files for frontend
+        if path.startswith("/static") or path.startswith("/assets"):
+            print(f"[AuthMiddleware] STATIC: {path}", flush=True)
+            return await call_next(request)
+
+        # Allow frontend SPA root
+        if path == "/":
+            print(f"[AuthMiddleware] SPA ROOT: {path}", flush=True)
+            return await call_next(request)
+
+        # Check for session cookie (web UI)
+        session_id = request.cookies.get("life2tea_session")
+        print(f"[AuthMiddleware] session_id={session_id}", flush=True)
+        if session_id:
             try:
-                mod = _get_api_keys_module()
-                manager = mod.get_api_key_manager()
-                if manager is None or not manager.list_keys():
-                    await self.app(scope, receive, send)
-                    return
-            except Exception:
-                await self.app(scope, receive, send)
-                return
+                from app.core.user_service import get_user_service
+                user_service = get_user_service()
+                user = user_service.validate_session(session_id)
+                print(f"[AuthMiddleware] validated={user is not None} for {method} {path}", flush=True)
+                if user:
+                    request.state.current_user = user
+                    print(f"[AuthMiddleware] ALLOWED: {method} {path} (session)", flush=True)
+                    return await call_next(request)
+            except Exception as e:
+                print(f"[AuthMiddleware] session validation error: {e} for {method} {path}", flush=True)
+                pass
 
-        # Validate API key for all other requests
+        # Check for API Key (Bearer token)
         auth_header = request.headers.get("Authorization", "")
-        key = self._validate_key(auth_header, path)
+        if auth_header.startswith("Bearer "):
+            key = self._validate_key(auth_header, path)
+            if key:
+                if self._check_scopes(key, path):
+                    request.state.api_key = key
+                    return await call_next(request)
+                else:
+                    return JSONResponse(
+                        status_code=403,
+                        content={
+                            "error": "forbidden",
+                            "message": "Insufficient scopes.",
+                        },
+                    )
 
-        if key is None:
-            response = JSONResponse(
-                status_code=401,
-                content={
-                    "error": "unauthorized",
-                    "message": "Invalid or missing API key",
-                },
-            )
-            await response(scope, receive, send)
-            return
+        # Allow POST /api/keys for key creation (first key)
+        if path == "/api/keys" and method == "POST":
+            try:
+                from app.core.api_keys import get_api_key_manager
+                manager = get_api_key_manager()
+                if not manager.list_keys():
+                    return await call_next(request)
+            except Exception:
+                pass
 
-        # Check scopes for protected endpoints
-        if not self._check_scopes(key, path):
-            response = JSONResponse(
-                status_code=403,
-                content={
-                    "error": "forbidden",
-                    "message": "Insufficient scopes.",
-                },
-            )
-            await response(scope, receive, send)
-            return
-
-        # Add key info to request state for downstream use
-        request.state.api_key = key
-
-        # Continue with request
-        await self.app(scope, receive, send)
+        # No auth — return 401
+        return JSONResponse(
+            status_code=401,
+            content={
+                "error": "unauthorized",
+                "message": "Authentication required",
+            },
+        )
 
     def _validate_key(self, auth_header: str, path: str) -> Optional["ApiKey"]:
         """Validate API key and return the ApiKey object if valid."""
@@ -107,8 +114,8 @@ class ApiKeyMiddleware:
             return None
 
         try:
-            mod = _get_api_keys_module()
-            manager = mod.get_api_key_manager()
+            from app.core.api_keys import get_api_key_manager
+            manager = get_api_key_manager()
             return manager.verify_key(auth_header)
         except Exception:
             return None
@@ -126,17 +133,14 @@ class ApiKeyMiddleware:
     def _get_required_scopes(self, path: str) -> list:
         """Determine required scopes for a given path."""
         if path.startswith("/api/keys"):
-            mod = _get_api_keys_module()
-            return [mod.Scope.ADMIN]
+            from app.core.api_keys import Scope
+            return [Scope.ADMIN]
         if path.startswith("/api/chat"):
-            mod = _get_api_keys_module()
-            return [mod.Scope.CHAT]
+            from app.core.api_keys import Scope
+            return [Scope.CHAT]
         if path.startswith("/api/models") and path != "/api/models":
-            mod = _get_api_keys_module()
+            from app.core.api_keys import Scope
             if "load" in path or "unload" in path:
-                return [mod.Scope.MODELS_WRITE]
-            return [mod.Scope.MODELS_READ]
+                return [Scope.MODELS_WRITE]
+            return [Scope.MODELS_READ]
         return []
-
-
-__all__ = ["ApiKeyMiddleware"]

@@ -4,17 +4,26 @@
 
     <div class="settings-section">
       <h3>{{ t("settings.section.paths") }}</h3>
-      <div class="form-group">
+      <div class="form-group path-field">
         <label>{{ t("settings.labels.modelsDir") }}</label>
-        <input v-model="config.models_dir" :placeholder="t('settings.labels.modelsDir')" />
+        <input v-model="config.models_dir" readonly />
+        <button class="btn-browse" @click="openPicker('models_dir', false)">
+          {{ t("settings.picker.browse") }}
+        </button>
       </div>
-      <div class="form-group">
+      <div class="form-group path-field">
         <label>{{ t("settings.labels.backendDir") }}</label>
-        <input v-model="config.llama_backend_dir" :placeholder="t('settings.labels.backendDir')" />
+        <input v-model="config.llama_backend_dir" readonly />
+        <button class="btn-browse" @click="openPicker('llama_backend_dir', false)">
+          {{ t("settings.picker.browse") }}
+        </button>
       </div>
-      <div class="form-group">
+      <div class="form-group path-field">
         <label>{{ t("settings.labels.serverExe") }}</label>
-        <input v-model="config.llama_server_exe" :placeholder="t('settings.labels.serverExe')" />
+        <input v-model="config.llama_server_exe" readonly />
+        <button class="btn-browse" @click="openPicker('llama_server_exe', true)">
+          {{ t("settings.picker.browse") }}
+        </button>
       </div>
     </div>
 
@@ -37,6 +46,8 @@
         <input v-model.number="config.batch_size" type="number" min="1" max="4096" />
       </div>
     </div>
+
+    <!-- 模型特定配置在 ModelsView 中管理 -->
 
     <div class="settings-section">
       <h3>{{ t("settings.section.backendOptions") }}</h3>
@@ -87,12 +98,38 @@
     <div v-if="message" class="message" :class="messageType">
       {{ message }}
     </div>
+
+    <PathPickerModal
+      v-model="showPicker.models_dir"
+      :title="t('settings.picker.title')"
+      :initial-path="config.models_dir || ''"
+      :allow-file="false"
+      :path-type="getPathType('models_dir')"
+      @select="(path: string) => onPickerSelect('models_dir', path)"
+    />
+    <PathPickerModal
+      v-model="showPicker.llama_backend_dir"
+      :title="t('settings.picker.title')"
+      :initial-path="config.llama_backend_dir || ''"
+      :allow-file="false"
+      :path-type="getPathType('llama_backend_dir')"
+      @select="(path: string) => onPickerSelect('llama_backend_dir', path)"
+    />
+    <PathPickerModal
+      v-model="showPicker.llama_server_exe"
+      :title="t('settings.picker.title')"
+      :initial-path="config.llama_server_exe || ''"
+      :allow-file="true"
+      :path-type="getPathType('llama_server_exe')"
+      @select="(path: string) => onPickerSelect('llama_server_exe', path)"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, reactive, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
+import PathPickerModal from "../components/PathPickerModal.vue";
 
 const { t } = useI18n();
 
@@ -101,9 +138,28 @@ const saving = ref(false);
 const message = ref("");
 const messageType = ref<"success" | "error">("success");
 
+const showPicker = reactive({
+  models_dir: false,
+  llama_backend_dir: false,
+  llama_server_exe: false,
+});
+
+function openPicker(field: string, allowFile: boolean) {
+  (showPicker as any)[field] = true;
+}
+
+function getPathType(field: string): 'directory' | 'executable' {
+  if (field === 'llama_server_exe') return 'executable';
+  return 'directory';
+}
+
+function onPickerSelect(field: string, path: string) {
+  (config.value as any)[field] = path;
+}
+
 async function load() {
   try {
-    const res = await fetch("/api/config/global");
+    const res = await fetch("/api/config/global", { credentials: "include" });
     if (!res.ok) throw new Error("Failed to load config");
     config.value = await res.json();
   } catch (e: any) {
@@ -118,6 +174,7 @@ async function save() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(config.value),
+      credentials: "include",
     });
     const data = await res.json();
     if (data.ok) {
@@ -210,6 +267,27 @@ h2 {
 .form-group select:focus {
   outline: none;
   border-color: #534ab7;
+}
+
+.path-field input {
+  cursor: text;
+}
+
+.btn-browse {
+  padding: 6px 14px;
+  background: #2d2d4a;
+  color: #7c5cff;
+  border: 1px solid #534ab7;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85em;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.btn-browse:hover {
+  background: #3d3d5a;
+  color: #9d7fff;
 }
 
 .checkbox-group {

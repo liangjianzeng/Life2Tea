@@ -37,10 +37,22 @@ sys.path.insert(0, os.path.join(PROJECT_ROOT, "backend"))
 
 # ── Core managers ──────────────────────────────────────
 from app.core.config import ConfigManager
+from app.core.database import init_db, get_db
+from app.core.user_service import init_user_service, get_user_service
+
+# ── Initialize database and user service at module level ──
+# This ensures they're available before lifespan runs (needed for middleware)
+config_dir = os.path.join(PROJECT_ROOT, "config")
+os.makedirs(config_dir, exist_ok=True)
+init_db(config_dir)
+init_user_service(get_db())
+print(f"[Main] Database initialized: {get_db().db_path}")
+print(f"[Main] UserService initialized")
 from app.core.logger import (
     LoggerManager, init_logger_manager, get_logger_manager
 )
 from app.core.metrics import MetricsCollector
+from app.core.stats_service import StatsService
 from app.plugins.lifecycle import PluginLifecycleManager
 from app.plugins.model_registry import ModelRegistry
 from app.plugins.backend_registry import (
@@ -79,6 +91,14 @@ def get_metrics_collector(request: Request = None) -> MetricsCollector:
     mgr = getattr(state, "metrics_collector", None)
     if mgr is None:
         raise RuntimeError("MetricsCollector not initialized")
+    return mgr
+
+
+def get_stats_service(request: Request = None) -> StatsService:
+    state = _get_state(request)
+    mgr = getattr(state, "stats_service", None)
+    if mgr is None:
+        raise RuntimeError("StatsService not initialized")
     return mgr
 
 
@@ -138,15 +158,28 @@ async def lifespan(app: FastAPI):
     os.makedirs(config_dir, exist_ok=True)
     os.makedirs(log_dir, exist_ok=True)
 
+    # Database and UserService already initialized at module level
+    app.state.db = get_db()
+    app.state.user_service = get_user_service()
+
     # Initialize all managers and store them in app.state
-    app.state.config_mgr = ConfigManager(config_dir)
-    init_logger_manager(log_dir, retention_days=30)
-    app.state.logger_mgr = get_logger_manager()
-    app.state.metrics_collector = MetricsCollector()
-    app.state.lifecycle_mgr = PluginLifecycleManager(log_dir)
-    app.state.model_registry = ModelRegistry(_get_models_dir())
-    from app.core.routing import SystemRouter
-    app.state.system_router = SystemRouter()
+    try:
+        app.state.config_mgr = ConfigManager(config_dir)
+        init_logger_manager(log_dir, retention_days=30)
+        app.state.logger_mgr = get_logger_manager()
+        app.state.metrics_collector = MetricsCollector()
+        # Initialize StatsService
+        from app.core.stats_middleware import register_stats_service
+        app.state.stats_service = StatsService(app.state.db)
+        app.state.stats_service.create_tables()
+        register_stats_service(app.state.stats_service)
+        app.state.lifecycle_mgr = PluginLifecycleManager(log_dir)
+        app.state.model_registry = ModelRegistry(_get_models_dir(), config_mgr=app.state.config_mgr)
+        from app.core.routing import SystemRouter
+        app.state.system_router = SystemRouter()
+    except Exception as e:
+        print(f"[LIFECYCLE] Error during initialization: {e}", flush=True)
+        raise
 
     # Initialize plugin registry: manifests first, GGUF files as fallback.
     from app.plugins.registry import PluginRegistry
@@ -173,15 +206,19 @@ async def lifespan(app: FastAPI):
                     f"{n_plugins} plugin descriptors")
 
     # ── Initialize API key manager ──
+    print("[LIFECYCLE] Initializing API key manager...", flush=True)
     from app.core.api_keys import init_api_key_manager
-    init_api_key_manager(app.state.config_mgr)
+    init_api_key_manager(app.state.db)
 
     # ── Add api_keys_router routes (after managers initialized) ──
+    print("[LIFECYCLE] Adding API keys routes...", flush=True)
     _add_api_keys_routes()
 
     # ── Include other routers after managers are initialized ──
+    print("[LIFECYCLE] Including routers...", flush=True)
     from app.routers import config_router, models_router, plugins_router
     from app.routers import chat_router, metrics_router, logs_router, routing_router
+    from app.routers import auth_router, stats_router
 
     app.include_router(config_router, prefix="/api/config", tags=["Config"])
     app.include_router(models_router, prefix="/api/models", tags=["Models"])
@@ -190,7 +227,9 @@ async def lifespan(app: FastAPI):
     app.include_router(metrics_router, prefix="/api/metrics", tags=["Metrics"])
     app.include_router(logs_router, prefix="/api/logs", tags=["Logs"])
     app.include_router(routing_router, prefix="/api/router", tags=["Router"])
-    print("[LIFECYCLE] Routers registered, total routes:", len(app.routes))
+    app.include_router(auth_router, prefix="/api/auth", tags=["Auth"])
+    app.include_router(stats_router.router)
+    print("[LIFECYCLE] Routers registered, total routes:", len(app.routes), flush=True)
     # Print all routes that have a path attribute
     for r in app.routes:
         if hasattr(r, 'path'):
@@ -201,9 +240,6 @@ async def lifespan(app: FastAPI):
                     print("  -", sr.path)
 
     logger.info("system", "Life2Tea backend started successfully")
-    
-    # Add api_keys_router routes after managers are initialized
-    _add_api_keys_routes()
 
     yield
 
@@ -226,8 +262,11 @@ app = FastAPI(
 
 # ── Add API Key middleware (before routers) ──
 # Must be added before lifespan runs (after app creation)
-from app.core.api_keys_middleware import ApiKeyMiddleware
-app.add_middleware(ApiKeyMiddleware)
+from app.core.api_keys_middleware import AuthMiddleware
+app.add_middleware(AuthMiddleware)
+
+from app.core.stats_middleware import StatsMiddleware
+app.add_middleware(StatsMiddleware)
 # (file://), and loopback origins are the legitimate clients.
 _LOCAL_ORIGINS = [
     "http://127.0.0.1:5005",
@@ -286,22 +325,8 @@ def start_server(host: str = "127.0.0.1", port: int = 3003):
     uvicorn.run(app, host=host, port=port, log_level="info")
 
 
-# ── Add api_keys_router routes (after lifespan initializes app.state) ──
-# We add routes here as a fallback if lifespan didn't run
-def _ensure_api_keys_routes():
-    """Ensure api_keys_router routes are added to app."""
-    if not any(hasattr(r, 'path') and r.path == '/api/keys' for r in app.routes):
-        try:
-            from app.routers import api_keys_router
-            for route in api_keys_router.routes:
-                path = "/api/keys" + (route.path or "")
-                app.add_api_route(path, route.endpoint, methods=list(route.methods or []), tags=["API Keys"])
-        except Exception as e:
-            print(f"[WARN] Failed to add api_keys routes: {e}", flush=True)
-
-
-# Call it now (may fail if api_keys_router dependencies not available)
-_ensure_api_keys_routes()
+# ── Server entry point ──
+# Routes are registered during lifespan startup.
 
 
 if __name__ == "__main__":

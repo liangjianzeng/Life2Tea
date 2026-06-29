@@ -12,7 +12,8 @@ Endpoints:
 """
 
 import os
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict
 
@@ -21,6 +22,45 @@ from ..plugins.model_registry import ModelRegistry
 from ..plugins.lifecycle import PluginLifecycleManager
 from ..plugins.registry import ModelInfoAdapter
 from ..core.config import ConfigManager
+
+
+async def verify_auth(request: Request):
+    """Verify authentication - session cookie or API key."""
+    print(f"*** verify_auth ENTRY *** {request.method} {request.url.path}", flush=True)
+    from app.core.user_service import get_user_service
+    from app.core.api_keys import get_api_key_manager
+
+    session_id = request.cookies.get("life2tea_session")
+    print(f"*** session_id: {session_id}", flush=True)
+    if session_id:
+        try:
+            svc = get_user_service()
+            print(f"*** svc: {svc}", flush=True)
+            user = svc.validate_session(session_id)
+            print(f"*** user: {user}", flush=True)
+            if user:
+                request.state.current_user = user
+                print(f"*** auth OK", flush=True)
+                return
+        except Exception as e:
+            print(f"*** auth error: {e}", flush=True)
+
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        manager = get_api_key_manager()
+        try:
+            key = manager.verify_key(auth_header)
+            if key:
+                request.state.api_key = key
+                return
+        except Exception as e:
+            print(f"[verify_auth] api key validation error: {e}", flush=True)
+
+    print(f"*** auth FAILED", flush=True)
+    raise HTTPException(status_code=401, detail="Authentication required")
+
+
+auth_dep = Depends(verify_auth)
 
 
 router = APIRouter()
@@ -54,22 +94,37 @@ def _merge_plugin_models(legacy_models: List[Dict], plugin_registry) -> List[Dic
 
 @router.get("", summary="List all discovered models (GGUFs + plugins)")
 async def list_models(
+    request: Request,
     registry: ModelRegistry = Depends(get_model_registry),
+    lifecycle: PluginLifecycleManager = Depends(get_lifecycle_mgr),
     plugin_registry=Depends(get_plugin_registry),
+    _auth: None = auth_dep,
 ):
+    print(f"[list_models] ENTRY: family={None}", flush=True)
+    print(f"[list_models] current_user: {request.state.current_user}", flush=True)
     models = _merge_plugin_models(registry.list_models(), plugin_registry)
+    # Attach running instance info to each model
+    for m in models:
+        family = m.get("family")
+        inst = lifecycle.get_instance(family)
+        if inst and inst.status == "running":
+            m["instance"] = inst.to_dict()
+        else:
+            m["instance"] = None
     return {"models": models}
 
 
 @router.post("/scan", summary="Re-scan models directory")
 async def scan_models(
+    request: Request,
     cfg_mgr: ConfigManager = Depends(get_config_mgr),
     registry: ModelRegistry = Depends(get_model_registry),
     plugin_registry=Depends(get_plugin_registry),
+    _auth: None = auth_dep,
 ):
     cfg = cfg_mgr.get_global()
     models_dir = cfg.get("models_dir", "")
-    new_registry = ModelRegistry(models_dir)
+    new_registry = ModelRegistry(models_dir, config_mgr=cfg_mgr)
     # Update app.state so future requests see the new registry
     import app.main as main_mod
     main_mod.app.state.model_registry = new_registry
@@ -105,8 +160,10 @@ async def get_model_params(
 @router.post("/{family}/unload", summary="Stop LLM backend for this model")
 async def unload_model(
     family: str,
+    request: Request,
     cfg_mgr: ConfigManager = Depends(get_config_mgr),
     lifecycle: PluginLifecycleManager = Depends(get_lifecycle_mgr),
+    _auth: None = auth_dep,
 ):
     """Stop the model plugin instance."""
     print(f"[unload_model] ENTRY: family={family}", flush=True)
@@ -139,13 +196,16 @@ async def list_backends(cfg_mgr: ConfigManager = Depends(get_config_mgr)):
 @router.post("/{family}/load", summary="Start LLM backend with this model")
 async def load_model(
     family: str,
+    request: Request,
     body: LoadModelBody = None,
     cfg_mgr: ConfigManager = Depends(get_config_mgr),
     registry: ModelRegistry = Depends(get_model_registry),
     lifecycle: PluginLifecycleManager = Depends(get_lifecycle_mgr),
+    _auth: None = auth_dep,
 ):
     """Start llama-server with the specified model (fully automated)."""
     print(f"[load_model] ENTRY: family={family}, body={body}", flush=True)
+    print(f"[load_model] current_user: {request.state.current_user}", flush=True)
     cfg = cfg_mgr.get_global()
     info = registry.get_model(family)
     if not info:
@@ -168,7 +228,7 @@ async def load_model(
     params = registry.get_default_params(family)
     params["ngl"] = cfg.get("gpu_layers", params["ngl"])
     params["ctx"] = cfg.get("ctx_size", params.get("ctx", 32768))
-    args = registry.build_server_args(family, params, backend.server_path)
+    args = registry.build_server_args(family, params, backend.server_path, port=port)
 
     # Check if already running
     try:
@@ -224,19 +284,3 @@ async def load_model(
         )
 
 
-@router.post("/{family}/unload", summary="Stop LLM backend for this model")
-async def unload_model(
-    family: str,
-    lifecycle: PluginLifecycleManager = Depends(get_lifecycle_mgr),
-):
-    """Stop the model plugin instance."""
-    print(f"[unload_model] ENTRY: family={family}", flush=True)
-    try:
-        lifecycle.stop_plugin(family)
-        return {"ok": True, "message": f"Model {family} stopped"}
-    except Exception as e:
-        print(f"[unload_model] Failed to stop: {e}", flush=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to stop model: {e}",
-        )

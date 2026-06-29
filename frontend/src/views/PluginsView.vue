@@ -78,7 +78,7 @@ const loadingPlugin = ref<string | null>(null);
 async function refresh() {
   loading.value = true;
   try {
-    const res = await fetch("/api/plugins");
+    const res = await fetch("/api/plugins", { credentials: "include" });
     const data = await res.json();
     plugins.value = data.plugins || [];
   } catch (e) {
@@ -96,6 +96,7 @@ async function loadPlugin(p: Plugin) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ port }),
+      credentials: "include",
     });
     const data = await res.json();
     if (data.ok) {
@@ -117,6 +118,7 @@ async function unloadPlugin(p: Plugin) {
   try {
     const res = await fetch(`/api/plugins/${p.family}/unload`, {
       method: "POST",
+      credentials: "include",
     });
     const data = await res.json();
     if (data.ok) {

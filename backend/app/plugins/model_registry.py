@@ -25,8 +25,8 @@ DEFAULT_PARAMS = {
     "batch": 1024,
     "ubatch": 512,
     "threads": 8,
-    "cache_type_k": "q8_0",
-    "cache_type_v": "q8_0",
+    "cache_type_k": None,
+    "cache_type_v": None,
     "flash_attn": False,
     "mmap": True,
     "mlock": False,
@@ -53,7 +53,7 @@ FAMILY_PARAMS = {
         "ctx": 65536, "batch": 512, "ubatch": 512,
         "temp": 0.7, "top_k": 20, "top_p": 0.8, "min_p": 0.0,
         "presence_penalty": 1.5, "repeat_penalty": 1.05,
-        "cache_type_k": "q8_0", "cache_type_v": "q8_0",
+        "cache_type_k": None, "cache_type_v": None,
         "spec_type": "draft-mtp", "spec_draft_n_max": 2,
         "spec_draft_type_k": "f16", "spec_draft_type_v": "f16",
         "flash_attn": True, "reasoning": False,
@@ -143,10 +143,11 @@ def classify_family(name: str) -> Tuple[str, str]:
 class ModelRegistry:
     """Discovers, classifies, and registers model plugins."""
 
-    def __init__(self, models_dir: str):
+    def __init__(self, models_dir: str, config_mgr=None):
         self._models_dir = models_dir
         self._registry: Dict[str, ModelInfo] = {}
         self._lock = threading.Lock()
+        self.config_mgr = config_mgr
         self._scan()
 
     def scan(self) -> List[dict]:
@@ -182,6 +183,11 @@ class ModelRegistry:
         for fam_key, overrides in FAMILY_PARAMS.items():
             if info.family.startswith(fam_key):
                 params.update(overrides)
+        # Merge user-configured model params (highest priority)
+        user_config = self.config_mgr.get_model_config(info.name) if self.config_mgr else None
+        if user_config and isinstance(user_config, dict):
+            user_params = user_config.get("params", {})
+            params.update(user_params)
         size = info.size_gb
         # Be conservative with context size for large models on 16GB GPU
         if size > 18:
@@ -195,7 +201,7 @@ class ModelRegistry:
             params["ctx"] = max(params.get("ctx", 32768), 65536)
         return params
 
-    def build_server_args(self, family: str, params: dict, server_exe: str) -> list:
+    def build_server_args(self, family: str, params: dict, server_exe: str, port: int = None) -> list:
         """Build command-line arguments for llama-server.exe."""
         info = self.get_model(family)
         if not info:
@@ -225,14 +231,21 @@ class ModelRegistry:
 
         args = [server_exe_win]
         args += ["--model", model_path]
+        # Add port and host if provided
+        if port is not None:
+            args += ["--port", str(port)]
+            args += ["--host", "127.0.0.1"]
         args += ["-ngl", str(params.get("ngl", 99))]
         args += ["-c", str(params.get("ctx", 32768))]
         args += ["--parallel", str(params.get("parallel", 1))]
         args += ["--threads", str(params.get("threads", 8))]
         args += ["-b", str(params.get("batch", 1024))]
         args += ["-ub", str(params.get("ubatch", 512))]
-        args += ["--cache-type-k", params.get("cache_type_k", "q8_0")]
-        args += ["--cache-type-v", params.get("cache_type_v", "q8_0")]
+        # Don't force cache type - let llama-server auto-select for optimal memory usage
+        if params.get("cache_type_k"):
+            args += ["--cache-type-k", params["cache_type_k"]]
+        if params.get("cache_type_v"):
+            args += ["--cache-type-v", params["cache_type_v"]]
 
         # Use --no-mmap for large models (> 8GB) to avoid address space issues
         # Actually, llama.cpp does NOT have a --no-mmap flag.
@@ -276,6 +289,9 @@ class ModelRegistry:
             args += ["--spec-draft-type-v", params.get("spec_draft_type_v", "f16")]
 
         args += ["--alias", family]
+
+        # Disable prompt cache - llama.cpp uses dynamic KV cache allocation
+        args += ["--cache-ram", "0"]
 
         # Add log-file argument to capture server logs
         log_file = os.path.join(os.path.dirname(info.path), f"{family}_server.log")

@@ -73,3 +73,112 @@ async def get_model_config(family: str, mgr: ConfigManager = Depends(get_config_
 async def save_model_config(family: str, body: ModelConfigBody, mgr: ConfigManager = Depends(get_config_mgr)):
     mgr.save_plugin_config(family, body.params)
     return {"ok": True}
+
+
+# ── Model-Specific Configuration API ──────────────────────────────────
+
+@router.get("/model-configs")
+async def list_model_configs(mgr: ConfigManager = Depends(get_config_mgr)):
+    """List all model-specific configurations."""
+    return mgr.list_model_configs()
+
+
+@router.get("/model-config/{model}")
+async def get_model_specific_config(model: str, mgr: ConfigManager = Depends(get_config_mgr)):
+    """Get configuration for a specific model."""
+    config = mgr.get_model_config(model)
+    if config is None:
+        raise HTTPException(status_code=404, detail="Model config not found")
+    return config
+
+
+@router.post("/model-config/{model}")
+async def save_model_specific_config(model: str, body: ModelConfigBody, mgr: ConfigManager = Depends(get_config_mgr)):
+    """Save configuration for a specific model."""
+    mgr.save_model_config(model, body.params)
+    return {"ok": True}
+
+
+@router.delete("/model-config/{model}")
+async def delete_model_specific_config(model: str, mgr: ConfigManager = Depends(get_config_mgr)):
+    """Delete configuration for a specific model."""
+    ok = mgr.delete_model_config(model)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Model config not found")
+    return {"ok": True}
+
+
+# ── Directory browsing API ────────────────────────────────────────────
+
+def _safe_path(raw_path: str) -> Optional[str]:
+    """Validate and normalize a user-supplied path.
+
+    Returns the absolute normalized path if safe, otherwise None.
+    Disallows path traversal (..), requires the path to exist.
+    """
+    import platform
+
+    if not raw_path or not isinstance(raw_path, str):
+        return None
+
+    # Normalize separators and resolve
+    normalized = os.path.normpath(raw_path)
+
+    # Block path traversal
+    if ".." in normalized.split(os.sep):
+        return None
+
+    # On Windows, require a valid drive letter
+    if platform.system() == "Windows":
+        if len(normalized) < 2 or normalized[1] != ":":
+            return None
+
+    # Must exist on disk
+    if not os.path.exists(normalized):
+        return None
+
+    return normalized
+
+
+@router.get("/dirs/list")
+async def list_directory(path: str):
+    """List contents of a directory (subdirs + files)."""
+    safe = _safe_path(path)
+    if safe is None:
+        raise HTTPException(status_code=400, detail="Invalid or inaccessible path")
+
+    if not os.path.isdir(safe):
+        raise HTTPException(status_code=400, detail="Not a directory")
+
+    try:
+        entries = os.listdir(safe)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    dirs = []
+    files = []
+    for name in sorted(entries):
+        full = os.path.join(safe, name)
+        if os.path.isdir(full):
+            # Only include directories with at least one entry (to avoid listing deep trees)
+            try:
+                sub = os.listdir(full)
+                if sub:
+                    dirs.append(name)
+            except PermissionError:
+                dirs.append(name)
+        else:
+            files.append(name)
+
+    return {"path": safe, "dirs": dirs, "files": files}
+
+
+@router.get("/dirs/exists")
+async def check_directory(path: str):
+    """Check if a path exists and whether it is a directory or file."""
+    safe = _safe_path(path)
+    if safe is None:
+        return {"exists": False}
+
+    is_dir = os.path.isdir(safe)
+    return {"exists": True, "is_dir": is_dir, "path": safe}

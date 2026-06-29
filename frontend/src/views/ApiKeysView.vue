@@ -32,7 +32,17 @@
     </div>
 
     <div class="api-keys-list">
-      <h3>{{ t("settings.apiKeys.title") }}</h3>
+      <div class="list-header">
+        <h3>{{ t("settings.apiKeys.title") }}</h3>
+        <div class="range-selector">
+          <label>{{ t("settings.apiKeys.timeRange") }}</label>
+          <select v-model="statRange" @change="loadKeyStats" class="input-select-small">
+            <option value="today">{{ t("settings.apiKeys.rangeToday") }}</option>
+            <option value="7d">{{ t("settings.apiKeys.range7d") }}</option>
+            <option value="30d">{{ t("settings.apiKeys.range30d") }}</option>
+          </select>
+        </div>
+      </div>
       <div v-if="keys.length === 0" class="empty-state">
         {{ t("settings.apiKeys.none") }}
       </div>
@@ -42,35 +52,118 @@
           <div class="key-meta">
             <span>创建: {{ formatDate(key.created_at_iso) }}</span>
             <span v-if="key.expires_at_iso">过期: {{ formatDate(key.expires_at_iso) }}</span>
-            <span>剩余: {{ key.remaining_days }} 天</span>
+            <span v-if="key.remaining_days != null">{{ t("settings.apiKeys.remainingDays", { days: key.remaining_days }) }}</span>
+            <span v-else>{{ t("settings.apiKeys.neverExpires") }}</span>
           </div>
           <div class="key-scopes">
             <span v-for="scope in key.scopes" :key="scope" class="scope-badge">{{ scope }}</span>
           </div>
+          <div class="key-hash" v-if="key.key">
+            {{ t("settings.apiKeys.keyHash") }}: <code>{{ key.key.slice(0, 8) }}...{{ key.key.slice(-4) }}</code>
+          </div>
+          <div class="key-stats" v-if="keyStatMap[key.name]">
+            <div class="stat-row">
+              <span>{{ t("settings.apiKeys.useCount") }}</span>
+              <span>{{ keyStatMap[key.name].request_count }}</span>
+            </div>
+            <div class="stat-row" v-if="keyStatMap[key.name].avg_response_time">
+              <span>{{ t("settings.apiKeys.avgLatency") }}</span>
+              <span>{{ keyStatMap[key.name].avg_response_time }}ms</span>
+            </div>
+            <div class="stat-row" v-if="keyStatMap[key.name].last_used_at">
+              <span>{{ t("settings.apiKeys.lastUsed") }}</span>
+              <span>{{ formatStatTime(keyStatMap[key.name].last_used_at) }}</span>
+            </div>
+          </div>
         </div>
         <div class="key-actions">
           <button
+            @click="showKeyDetail(key)"
+            class="btn-secondary"
+            :title="t('settings.apiKeys.viewDetail')"
+          >
+            {{ t("settings.apiKeys.viewDetail") }}
+          </button>
+          <button
+            v-if="key.key"
             @click="copyKey(key.id)"
             class="btn-secondary"
-            title="复制密钥（仅创建时显示）"
-            :disabled="!key.key"
+            :title="t('settings.apiKeys.copyKey')"
           >
-            复制
+            {{ t("settings.apiKeys.copyKey") }}
           </button>
           <button
             @click="revokeKey(key.id)"
             class="btn-warning"
-            title="撤销密钥"
+            :title="t('settings.apiKeys.revoke')"
           >
-            撤销
+            {{ t("settings.apiKeys.revoke") }}
           </button>
           <button
             @click="deleteKey(key.id)"
             class="btn-danger"
-            title="删除密钥"
+            :title="t('settings.apiKeys.delete')"
           >
-            删除
+            {{ t("settings.apiKeys.delete") }}
           </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- API Key 请求详情弹窗 -->
+    <div v-if="showDetailModal" class="modal-overlay" @click.self="closeDetailModal">
+      <div class="modal-content modal-large">
+        <div class="modal-header">
+          <h3>{{ t("settings.apiKeys.detailTitle", { name: detailKey?.name || '' }) }}</h3>
+          <button class="modal-close" @click="closeDetailModal">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div v-if="detailLoading" class="loading-state">{{ t("settings.apiKeys.loading") }}</div>
+          <div v-else-if="detailRequests.length === 0" class="empty-state">{{ t("settings.apiKeys.noRequests") }}</div>
+          <div v-else class="detail-table">
+            <table>
+              <thead>
+                <tr>
+                  <th>{{ t("settings.apiKeys.colTime") }}</th>
+                  <th>{{ t("settings.apiKeys.colMethod") }}</th>
+                  <th>{{ t("settings.apiKeys.colPath") }}</th>
+                  <th>{{ t("settings.apiKeys.colStatus") }}</th>
+                  <th>{{ t("settings.apiKeys.colLatency") }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="req in detailRequests" :key="req.timestamp" :class="'status-' + (req.status_code < 400 ? 'ok' : 'err')">
+                  <td>{{ formatStatTime(req.timestamp) }}</td>
+                  <td><span class="method-badge" :class="req.method">{{ req.method }}</span></td>
+                  <td>{{ req.path }}</td>
+                  <td>{{ req.status_code }}</td>
+                  <td>{{ req.response_time?.toFixed(1) }}ms</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 创建成功弹窗 -->
+    <div v-if="showCreateModal" class="modal-overlay" @click.self="closeCreateModal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h3>{{ t("settings.apiKeys.keyCreatedTitle") }}</h3>
+          <button class="modal-close" @click="closeCreateModal">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p>{{ t("settings.apiKeys.keyCreatedWarning") }}</p>
+          <div class="key-display">
+            <code>{{ createdKey }}</code>
+            <button class="btn-copy-key" @click="copyCreatedKey">
+              {{ t("settings.apiKeys.copyKey") }}
+            </button>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-primary" @click="closeCreateModal">{{ t("settings.apiKeys.done") }}</button>
         </div>
       </div>
     </div>
@@ -101,6 +194,11 @@ interface ApiKey {
 }
 
 const keys = ref<ApiKey[]>([]);
+const keyStatMap = ref<Record<string, any>>({});
+const showDetailModal = ref(false);
+const detailKey = ref<ApiKey | null>(null);
+const detailRequests = ref<any[]>([]);
+const detailLoading = ref(false);
 const newKey = ref({
   name: "",
   scopes: [] as string[],
@@ -108,10 +206,13 @@ const newKey = ref({
 });
 const message = ref("");
 const messageType = ref<"success" | "error">("success");
+const showCreateModal = ref(false);
+const createdKey = ref("");
+const statRange = ref("today");
 
 async function loadKeys() {
   try {
-    const res = await fetch("/api/keys");
+    const res = await fetch("/api/keys", { credentials: "include" });
     if (!res.ok) throw new Error("Failed to load keys");
     const data = await res.json();
     keys.value = data.keys || [];
@@ -125,22 +226,28 @@ async function createKey() {
     showMessage(t("settings.apiKeys.errorName"), "error");
     return;
   }
+  if (!newKey.value.scopes || newKey.value.scopes === "") {
+    showMessage(t("settings.apiKeys.errorSelectScope"), "error");
+    return;
+  }
   try {
     const res = await fetch("/api/keys", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         name: newKey.value.name,
-        scopes: newKey.value.scopes,
+        scopes: [newKey.value.scopes],
         expires_in_days: newKey.value.expires || null,
       }),
+      credentials: "include",
     });
     const data = await res.json();
     if (res.ok) {
-      showMessage(t("settings.apiKeys.successCreate"), "success");
-      // Show the plain key once
       if (data.key) {
-        showMessage(t("settings.apiKeys.keyCreated", { key: data.key }), "success");
+        createdKey.value = data.key;
+        showCreateModal.value = true;
+      } else {
+        showMessage(t("settings.apiKeys.successCreate"), "success");
       }
       loadKeys();
       newKey.value = { name: "", scopes: [], expires: 0 };
@@ -157,7 +264,7 @@ async function deleteKey(keyId: string) {
     return;
   }
   try {
-    const res = await fetch(`/api/keys/${keyId}`, { method: "DELETE" });
+    const res = await fetch(`/api/keys/${keyId}`, { method: "DELETE", credentials: "include" });
     if (res.ok) {
       showMessage(t("settings.apiKeys.successDelete"), "success");
       loadKeys();
@@ -174,7 +281,7 @@ async function revokeKey(keyId: string) {
     return;
   }
   try {
-    const res = await fetch(`/api/keys/${keyId}/revoke`, { method: "POST" });
+    const res = await fetch(`/api/keys/${keyId}/revoke`, { method: "POST", credentials: "include" });
     if (res.ok) {
       showMessage(t("settings.apiKeys.successRevoke"), "success");
       loadKeys();
@@ -194,6 +301,18 @@ function copyKey(keyId: string) {
   }
 }
 
+function copyCreatedKey() {
+  if (createdKey.value) {
+    navigator.clipboard.writeText(createdKey.value);
+    showMessage(t("settings.apiKeys.copied"), "success");
+  }
+}
+
+function closeCreateModal() {
+  showCreateModal.value = false;
+  createdKey.value = "";
+}
+
 function getKeyName(keyId: string): string {
   return keys.value.find((k) => k.id === keyId)?.name || keyId;
 }
@@ -211,7 +330,55 @@ function showMessage(text: string, type: "success" | "error") {
   }, 5000);
 }
 
-onMounted(loadKeys);
+async function loadKeyStats() {
+  try {
+    const res = await fetch(`/api/stats/api-keys?range=${statRange.value}`, { credentials: "include" });
+    if (res.ok) {
+      const data = await res.json();
+      const map: Record<string, any> = {};
+      for (const k of data.data || []) {
+        map[k.name] = k;
+      }
+      keyStatMap.value = map;
+    }
+  } catch (e) {
+    console.error("Failed to load key stats:", e);
+  }
+}
+
+async function showKeyDetail(key: ApiKey) {
+  detailKey.value = key;
+  showDetailModal.value = true;
+  detailLoading.value = true;
+  detailRequests.value = [];
+  try {
+    const res = await fetch(`/api/stats/key-detail?key_id=${encodeURIComponent(key.id)}&limit=100`, { credentials: "include" });
+    if (res.ok) {
+      const data = await res.json();
+      detailRequests.value = data.data || [];
+    }
+  } catch (e) {
+    console.error("Failed to load key detail:", e);
+  } finally {
+    detailLoading.value = false;
+  }
+}
+
+function closeDetailModal() {
+  showDetailModal.value = false;
+  detailKey.value = null;
+  detailRequests.value = [];
+}
+
+function formatStatTime(ts: string): string {
+  if (!ts) return "-";
+  try { return new Date(ts).toLocaleString("zh-CN"); } catch { return ts; }
+}
+
+onMounted(async () => {
+  await loadKeys();
+  await loadKeyStats();
+});
 </script>
 
 <style scoped>
@@ -283,6 +450,53 @@ h3 {
 
 .api-keys-list {
   margin-top: 24px;
+}
+
+.list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.range-selector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85em;
+  color: #888;
+}
+
+.input-select-small {
+  padding: 4px 8px;
+  background: #1a1a2e;
+  color: #e0e0ff;
+  border: 1px solid #2d2d4a;
+  border-radius: 4px;
+  font-size: 0.85em;
+}
+
+.key-stats {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: #0f0f1a;
+  border-radius: 6px;
+  border: 1px solid #2d2d4a;
+}
+
+.stat-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+  font-size: 0.82em;
+}
+
+.stat-row span:first-child {
+  color: #888;
+}
+
+.stat-row span:last-child {
+  color: #e0e0ff;
+  font-weight: 500;
 }
 
 .empty-state {
@@ -408,5 +622,162 @@ h3 {
   background: #3a1a1a;
   color: #f44336;
   border: 1px solid #4a2d2d;
+}
+
+/* Modal styles */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal-content {
+  background: #1a1a2e;
+  border: 1px solid #534ab7;
+  border-radius: 12px;
+  padding: 24px;
+  max-width: 500px;
+  width: 90%;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #2d2d4a;
+}
+
+.modal-header h3 {
+  margin: 0;
+  font-size: 1.2em;
+  color: #7c5cff;
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  color: #e0e0ff;
+  font-size: 1.5em;
+  cursor: pointer;
+  padding: 0 8px;
+  line-height: 1;
+}
+
+.modal-close:hover {
+  color: #f44336;
+}
+
+.modal-body {
+  margin-bottom: 16px;
+}
+
+.modal-body p {
+  color: #fbbf24;
+  font-size: 0.9em;
+  margin: 0 0 16px 0;
+}
+
+.key-display {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  background: #0d0d1a;
+  border: 1px solid #2d2d4a;
+  border-radius: 8px;
+}
+
+.key-display code {
+  flex: 1;
+  font-size: 0.95em;
+  color: #4caf50;
+  word-break: break-all;
+  user-select: all;
+}
+
+.btn-copy-key {
+  padding: 8px 16px;
+  background: #534ab7;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.9em;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.btn-copy-key:hover {
+  background: #6b5cc4;
+}
+
+.modal-large {
+  max-width: 800px;
+  width: 95%;
+  max-height: 80vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-large .modal-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.detail-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85em;
+}
+
+.detail-table th {
+  text-align: left;
+  padding: 8px;
+  border-bottom: 2px solid #2d2d4a;
+  color: #888;
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+  background: #1a1a2e;
+}
+
+.detail-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid #1a1a2e;
+  color: #c0c0e0;
+}
+
+.detail-table tr.status-ok:hover { background: rgba(52, 211, 153, 0.05); }
+.detail-table tr.status-err:hover { background: rgba(248, 113, 113, 0.05); }
+
+.method-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 0.85em;
+  font-weight: 600;
+}
+
+.method-badge.GET { color: #60a5fa; background: rgba(96, 165, 250, 0.1); }
+.method-badge.POST { color: #34d399; background: rgba(52, 211, 153, 0.1); }
+.method-badge.PUT { color: #fbbf24; background: rgba(251, 191, 36, 0.1); }
+.method-badge.DELETE { color: #f87171; background: rgba(248, 113, 113, 0.1); }
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 </style>

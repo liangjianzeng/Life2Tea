@@ -6,9 +6,15 @@ Endpoints:
   POST /api/chat/completion   (text completion)
   GET  /api/chat/model-info
   GET  /api/chat/health
+  GET  /api/chat/conversations  (list conversations)
+  GET  /api/chat/conversation/{id}  (get conversation)
+  POST /api/chat/conversation  (create conversation)
+  POST /api/chat/message  (save message)
 """
 
 import json
+import uuid
+from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -43,6 +49,17 @@ class CompletionBody(BaseModel):
     stream: bool = False
     max_tokens: int = 512
     temperature: float = 0.7
+
+
+class ConversationCreateBody(BaseModel):
+    title: Optional[str] = "New Conversation"
+    model_family: Optional[str] = None
+
+
+class MessageBody(BaseModel):
+    conversation_id: str
+    role: str
+    content: str
 
 
 def _get_router(request: Request) -> SystemRouter:
@@ -159,3 +176,103 @@ async def get_model_info(request: Request):
 async def chat_health(request: Request):
     handler = _get_handler(request, [{"role": "user", "content": "hi"}])
     return await handler.health_check()
+
+
+@router.get("/conversations", summary="List all conversations")
+async def list_conversations(request: Request):
+    from ..core.database import _db
+    db = _db.get_connection()
+    try:
+        cursor = db.execute(
+            "SELECT * FROM conversations ORDER BY updated_at DESC"
+        )
+        conversations = []
+        for row in cursor.fetchall():
+            conversations.append({
+                "id": row["id"],
+                "title": row["title"],
+                "model_family": row["model_family"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+                "is_active": bool(row["is_active"]),
+            })
+        return {"conversations": conversations}
+    finally:
+        db.close()
+
+
+@router.get("/conversation/{conversation_id}", summary="Get conversation with messages")
+async def get_conversation(conversation_id: str, request: Request):
+    from ..core.database import _db
+    db = _db.get_connection()
+    try:
+        cursor = db.execute(
+            "SELECT * FROM conversations WHERE id = ?", (conversation_id,)
+        )
+        conv = cursor.fetchone()
+        if not conv:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+
+        cursor = db.execute(
+            "SELECT * FROM messages WHERE conversation_id = ? ORDER BY timestamp",
+            (conversation_id,)
+        )
+        messages = []
+        for row in cursor.fetchall():
+            messages.append({
+                "id": row["id"],
+                "role": row["role"],
+                "content": row["content"],
+                "timestamp": row["timestamp"],
+            })
+
+        return {
+            "conversation": {
+                "id": conv["id"],
+                "title": conv["title"],
+                "model_family": conv["model_family"],
+                "created_at": conv["created_at"],
+                "updated_at": conv["updated_at"],
+            },
+            "messages": messages,
+        }
+    finally:
+        db.close()
+
+
+@router.post("/conversation", summary="Create new conversation")
+async def create_conversation(body: ConversationCreateBody, request: Request):
+    from ..core.database import _db
+    db = _db.get_connection()
+    try:
+        now = datetime.now().timestamp()
+        conv_id = str(uuid.uuid4())
+        db.execute(
+            "INSERT INTO conversations (id, title, model_family, created_at, updated_at, is_active) VALUES (?, ?, ?, ?, ?, 1)",
+            (conv_id, body.title, body.model_family, now, now)
+        )
+        db.commit()
+        return {"conversation": {"id": conv_id, "title": body.title, "model_family": body.model_family}}
+    finally:
+        db.close()
+
+
+@router.post("/message", summary="Save a message to conversation")
+async def save_message(body: MessageBody, request: Request):
+    from ..core.database import _db
+    db = _db.get_connection()
+    try:
+        msg_id = str(uuid.uuid4())
+        now = datetime.now().timestamp()
+        db.execute(
+            "INSERT INTO messages (id, conversation_id, role, content, timestamp) VALUES (?, ?, ?, ?, ?)",
+            (msg_id, body.conversation_id, body.role, body.content, now)
+        )
+        db.execute(
+            "UPDATE conversations SET updated_at = ? WHERE id = ?",
+            (now, body.conversation_id)
+        )
+        db.commit()
+        return {"message_id": msg_id, "ok": True}
+    finally:
+        db.close()
