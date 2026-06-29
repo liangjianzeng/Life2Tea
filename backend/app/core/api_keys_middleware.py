@@ -14,6 +14,17 @@ from fastapi import Request
 from fastapi.responses import JSONResponse
 from typing import Optional
 
+# Lazy imports to avoid circular dependencies
+_api_keys_module = None
+
+
+def _get_api_keys_module():
+    global _api_keys_module
+    if _api_keys_module is None:
+        from . import api_keys as mod
+        _api_keys_module = mod
+    return _api_keys_module
+
 
 class ApiKeyMiddleware:
     """Middleware to enforce API key authentication."""
@@ -48,8 +59,8 @@ class ApiKeyMiddleware:
         if path == "/api/keys" and method == "POST":
             # Allow key creation if manager not initialized or no keys exist
             try:
-                from .api_keys import get_api_key_manager
-                manager = get_api_key_manager()
+                mod = _get_api_keys_module()
+                manager = mod.get_api_key_manager()
                 if manager is None or not manager.list_keys():
                     await self.app(scope, receive, send)
                     return
@@ -96,8 +107,8 @@ class ApiKeyMiddleware:
             return None
 
         try:
-            from .api_keys import get_api_key_manager
-            manager = get_api_key_manager()
+            mod = _get_api_keys_module()
+            manager = mod.get_api_key_manager()
             return manager.verify_key(auth_header)
         except Exception:
             return None
@@ -115,16 +126,16 @@ class ApiKeyMiddleware:
     def _get_required_scopes(self, path: str) -> list:
         """Determine required scopes for a given path."""
         if path.startswith("/api/keys"):
-            from .api_keys import Scope
-            return [Scope.ADMIN]
+            mod = _get_api_keys_module()
+            return [mod.Scope.ADMIN]
         if path.startswith("/api/chat"):
-            from .api_keys import Scope
-            return [Scope.CHAT]
+            mod = _get_api_keys_module()
+            return [mod.Scope.CHAT]
         if path.startswith("/api/models") and path != "/api/models":
-            from .api_keys import Scope
+            mod = _get_api_keys_module()
             if "load" in path or "unload" in path:
-                return [Scope.MODELS_WRITE]
-            return [Scope.MODELS_READ]
+                return [mod.Scope.MODELS_WRITE]
+            return [mod.Scope.MODELS_READ]
         return []
 
 
