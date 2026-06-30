@@ -55,6 +55,7 @@ from app.core.metrics import MetricsCollector
 from app.core.stats_service import StatsService
 from app.plugins.lifecycle import PluginLifecycleManager
 from app.plugins.model_registry import ModelRegistry
+from app.core.model_router import ModelRouter
 from app.plugins.backend_registry import (
     detect_backend, list_all_available_backends, scan_system_for_llama_servers
 )
@@ -115,6 +116,13 @@ def get_model_registry(request: Request = None) -> ModelRegistry:
     mgr = getattr(state, "model_registry", None)
     if mgr is None:
         raise RuntimeError("ModelRegistry not initialized")
+    return mgr
+
+def get_model_router(request: Request = None) -> ModelRouter:
+    state = _get_state(request)
+    mgr = getattr(state, "model_router", None)
+    if mgr is None:
+        raise RuntimeError("ModelRouter not initialized")
     return mgr
 
 

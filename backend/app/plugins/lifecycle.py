@@ -172,28 +172,20 @@ class PluginLifecycleManager:
             print(f"[LIFECYCLE] Starting {plugin_name}: {command}", flush=True)
 
             try:
-                # Use powershell.exe to start llama-server.exe in a new detached process.
-                # This avoids sandbox restrictions that block CUDA init when started via Popen directly.
-                cmd_line = " ".join(f'"{arg}"' if " " in str(arg) else str(arg) for arg in command)
-                args_csv = ",".join(f'"{a}"' for a in command[1:])
-                ps_cmd = f'Start-Process -FilePath "{command[0]}" -ArgumentList {args_csv} -PassThru'
-
-                print(f"[LIFECYCLE] Launching via powershell.exe: {ps_cmd}", flush=True)
-
+                # On Linux/macOS, use Popen directly with detached process
+                print(f"[LIFECYCLE] Launching directly: {command}", flush=True)
+            
+                log_f = open(log_file, "w")
                 proc = subprocess.Popen(
-                    ["powershell.exe", "-Command", ps_cmd],
-                    stdout=subprocess.PIPE,
+                    command,
+                    stdout=log_f,
                     stderr=subprocess.STDOUT,
-                    stdin=None,
+                    stdin=subprocess.DEVNULL,
                     env=proc_env,
                     cwd=exe_dir,
-                    creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
-                    shell=False,
+                    start_new_session=True,
                 )
-                # Read the output to get the new process PID
-                output = proc.stdout.read().decode("utf-8", errors="replace").strip()
-                print(f"[LIFECYCLE] PowerShell output: {output}", flush=True)
-                print(f"[LIFECYCLE] Launcher started, PID={proc.pid}", flush=True)
+                print(f"[LIFECYCLE] Process started, PID={proc.pid}", flush=True)
             except Exception as e:
                 raise RuntimeError(f"Failed to start {plugin_name}: {e}")
 

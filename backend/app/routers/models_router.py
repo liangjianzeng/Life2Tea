@@ -101,7 +101,7 @@ async def list_models(
     _auth: None = auth_dep,
 ):
     print(f"[list_models] ENTRY: family={None}", flush=True)
-    print(f"[list_models] current_user: {request.state.current_user}", flush=True)
+    print(f"[list_models] current_user: {getattr(request.state, "current_user", None)}", flush=True)
     models = _merge_plugin_models(registry.list_models(), plugin_registry)
     # Attach running instance info to each model
     for m in models:
@@ -205,7 +205,7 @@ async def load_model(
 ):
     """Start llama-server with the specified model (fully automated)."""
     print(f"[load_model] ENTRY: family={family}, body={body}", flush=True)
-    print(f"[load_model] current_user: {request.state.current_user}", flush=True)
+    print(f"[load_model] current_user: {getattr(request.state, "current_user", None)}", flush=True)
     cfg = cfg_mgr.get_global()
     info = registry.get_model(family)
     if not info:

@@ -152,7 +152,7 @@ class ApiKeyManager:
     ) -> tuple[str, ApiKey]:
         """Generate a new API key. Returns (plain_key, api_key_obj)."""
         key_obj = ApiKey.create(name, scopes, expires_in_days, owner_id)
-        plain_key = hashlib.sha256(key_obj.hashed_key.encode()).hexdigest()
+        plain_key = key_obj.hashed_key
 
         conn = self.db.get_connection()
         try:
