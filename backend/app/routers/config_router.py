@@ -140,9 +140,29 @@ def _safe_path(raw_path: str) -> Optional[str]:
     return normalized
 
 
+def _enumerate_windows_drives() -> list[str]:
+    """Return available drive letters on Windows, e.g. ['C:', 'D:']."""
+    import string
+    drives = []
+    for letter in string.ascii_uppercase:
+        root = f"{letter}:\\"
+        if os.path.isdir(root):
+            drives.append(letter + ":")
+    return drives
+
+
 @router.get("/dirs/list")
 async def list_directory(path: str):
     """List contents of a directory (subdirs + files)."""
+    # On Windows, if path is '/' (default from frontend) or empty, enumerate drives
+    if path == "/" or not path:
+        import platform
+        if platform.system() == "Windows":
+            drives = _enumerate_windows_drives()
+            return {"path": "", "dirs": drives, "files": []}
+        # On Linux/Mac, '/' is valid
+        path = "/"
+
     safe = _safe_path(path)
     if safe is None:
         raise HTTPException(status_code=400, detail="Invalid or inaccessible path")

@@ -20,12 +20,12 @@ class StatsService:
 
     def __init__(self, db: Database):
         self.db = db
-
-    # ── Collectors ──────────────────────────────────────
-
-    def __init__(self, db: Database):
-        self.db = db
-        self._last_disk_io = None  # for computing disk IO rate
+        # Initialize disk IO baseline so the first rate poll is meaningful
+        self._last_disk_io = {
+            "time": datetime.now(),
+            "read_bytes": 0,
+            "write_bytes": 0,
+        }
 
     def collect_system_metrics(self) -> Dict[str, Any]:
         """Collect current system metrics"""

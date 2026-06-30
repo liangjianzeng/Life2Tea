@@ -103,6 +103,23 @@ def detect_quantization(filename: str) -> str:
     return match.group(0).upper() if match else "unknown"
 
 
+def is_model_disabled(model_family: str, config_mgr) -> bool:
+    """Check if a model is disabled in configuration."""
+    try:
+        if config_mgr:
+            # Try to get model config using family name
+            config = config_mgr.get_model_config(model_family)
+            if config and config.get("params", {}).get("disabled", False):
+                return True
+            # Also check plugin config
+            plugin_config = config_mgr.get_plugin_config(model_family)
+            if plugin_config and plugin_config.get("params", {}).get("disabled", False):
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def detect_params_from_filename(filename: str) -> float:
     name = filename.lower()
     patterns = [
@@ -323,17 +340,22 @@ class ModelRegistry:
                 family, display = classify_family(name)
                 default_port = FAMILY_PORTS.get(family, 9090)
 
+                # Check if model is disabled
+                disabled = is_model_disabled(family, self.config_mgr)
+
                 info = ModelInfo(
                     family=family, name=name, display=display,
                     path=path, size_gb=round(size_gb, 1),
                     quantization=quant, params_b=params_b,
                     default_port=default_port,
                 )
+                # Store disabled status in registry
                 registry[family] = info
 
         self._registry = registry
 
     def _to_dict(self, info: ModelInfo) -> dict:
+        disabled = is_model_disabled(info.family, self.config_mgr)
         return {
             "family": info.family,
             "name": info.name,
@@ -344,4 +366,5 @@ class ModelRegistry:
             "params_b": info.params_b,
             "default_port": info.default_port,
             "plugin_name": info.plugin_name,
+            "disabled": disabled,
         }

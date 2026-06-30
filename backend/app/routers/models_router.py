@@ -291,3 +291,86 @@ async def load_model(
         )
 
 
+@router.post("/{family}/disable", summary="Disable a model (prevent auto-loading)")
+async def disable_model(
+    family: str,
+    request: Request,
+    cfg_mgr: ConfigManager = Depends(get_config_mgr),
+    _auth: None = auth_dep,
+):
+    """Disable a model so it won't be loaded automatically."""
+    print(f"[disable_model] Disabling {family}", flush=True)
+    try:
+        # Get existing config to preserve other settings
+        existing_config = cfg_mgr.get_model_config(family)
+        if existing_config and "params" in existing_config:
+            # Update the params directly
+            existing_config["params"]["disabled"] = True
+            cfg_mgr.save_model_config(family, existing_config["params"])
+        else:
+            # Save model config with disabled flag
+            cfg_mgr.save_model_config(family, {"disabled": True})
+        return {"ok": True, "message": f"Model {family} disabled"}
+    except Exception as e:
+        print(f"[disable_model] Failed: {e}", flush=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to disable model: {e}",
+        )
+
+
+@router.post("/{family}/enable", summary="Enable a disabled model")
+async def enable_model(
+    family: str,
+    request: Request,
+    cfg_mgr: ConfigManager = Depends(get_config_mgr),
+    _auth: None = auth_dep,
+):
+    """Enable a previously disabled model."""
+    print(f"[enable_model] Enabling {family}", flush=True)
+    try:
+        # Get existing config
+        existing_config = cfg_mgr.get_model_config(family)
+        if existing_config and "params" in existing_config:
+            # Remove disabled flag from params
+            if "disabled" in existing_config["params"]:
+                del existing_config["params"]["disabled"]
+            # Save updated params (not the full config)
+            cfg_mgr.save_model_config(family, existing_config["params"])
+        else:
+            # No existing config, just ensure no disabled config exists
+            cfg_mgr.save_model_config(family, {})
+        return {"ok": True, "message": f"Model {family} enabled"}
+    except Exception as e:
+        print(f"[enable_model] Failed: {e}", flush=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to enable model: {e}",
+        )
+
+
+@router.get("/{family}/status", summary="Get model status (disabled/enabled)")
+async def get_model_status(
+    family: str,
+    request: Request,
+    cfg_mgr: ConfigManager = Depends(get_config_mgr),
+    _auth: None = auth_dep,
+):
+    """Check if a model is disabled."""
+    try:
+        model_config = cfg_mgr.get_model_config(family)
+        plugin_config = cfg_mgr.get_plugin_config(family)
+        disabled = False
+        if model_config and model_config.get("params", {}).get("disabled", False):
+            disabled = True
+        if plugin_config and plugin_config.get("params", {}).get("disabled", False):
+            disabled = True
+        return {"family": family, "disabled": disabled}
+    except Exception as e:
+        print(f"[get_model_status] Failed: {e}", flush=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get model status: {e}",
+        )
+
+

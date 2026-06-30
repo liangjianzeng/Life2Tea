@@ -147,8 +147,13 @@ class PluginLifecycleManager:
         port: int = 0,
         health_endpoint: str = "/health",
         env: Optional[Dict[str, str]] = None,
+        force: bool = False,
     ) -> PluginInstance:
         """Start a plugin process. If already running, stop first."""
+        # Check if model is disabled
+        if not force and self._is_plugin_disabled(plugin_name):
+            raise RuntimeError(f"Model {plugin_name} is disabled. Enable it in settings first.")
+
         with self._lock:
             # Stop existing instance
             if plugin_name in self._instances:
@@ -223,14 +228,59 @@ class PluginLifecycleManager:
                 health_endpoint=health_endpoint,
             )
             self._instances[plugin_name] = inst
+            
+            # Register with model router for unified routing
+            self._register_with_model_router(inst)
+            
             return inst
+
+    def _register_with_model_router(self, inst: PluginInstance):
+        """Register a running instance with the model router."""
+        try:
+            from ..main import app
+            if hasattr(app.state, "model_router"):
+                app.state.model_router.register_instance(
+                    family=inst.plugin_name,
+                    port=inst.port,
+                    host=inst.host,
+                )
+        except Exception as e:
+            print(f"[LIFECYCLE] Failed to register with model router: {e}", flush=True)
 
     def stop_plugin(self, plugin_name: str) -> bool:
         with self._lock:
             inst = self._instances.get(plugin_name)
             if not inst:
                 return False
+            # Unregister from model router before stopping
+            self._unregister_from_model_router(inst)
             return self._kill_instance(inst)
+
+    def _unregister_from_model_router(self, inst: PluginInstance):
+        """Unregister a stopping instance from the model router."""
+        try:
+            from ..main import app
+            if hasattr(app.state, "model_router"):
+                app.state.model_router.unregister_instance(inst.plugin_name)
+        except Exception as e:
+            print(f"[LIFECYCLE] Failed to unregister from model router: {e}", flush=True)
+
+    def _is_plugin_disabled(self, plugin_name: str) -> bool:
+        """Check if a plugin is disabled in configuration."""
+        try:
+            from ..main import app
+            if hasattr(app.state, "config_mgr"):
+                config_mgr = app.state.config_mgr
+                # Check both model and plugin config
+                model_config = config_mgr.get_model_config(plugin_name)
+                if model_config and model_config.get("params", {}).get("disabled", False):
+                    return True
+                plugin_config = config_mgr.get_plugin_config(plugin_name)
+                if plugin_config and plugin_config.get("params", {}).get("disabled", False):
+                    return True
+        except Exception:
+            pass
+        return False
 
     def stop_all(self):
         with self._lock:

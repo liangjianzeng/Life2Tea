@@ -117,4 +117,43 @@ function toggle() {
   font-size: 0.6em;
   opacity: 0.6;
 }
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+  .app-header {
+    padding: 0 12px;
+    height: 50px;
+  }
+  
+  .app-header nav {
+    display: none;
+  }
+  
+  .app-header .header-right {
+    flex: 1;
+    justify-content: flex-end;
+  }
+  
+  .user-info {
+    display: none;
+  }
+  
+  .logout-btn {
+    padding: 6px 10px;
+    font-size: 0.8em;
+  }
+  
+  .lang-btn {
+    margin-left: 8px;
+    padding: 6px 10px;
+    font-size: 0.8em;
+  }
+}
+
+/* Mobile hamburger menu */
+@media (max-width: 480px) {
+  .app-header {
+    height: 48px;
+  }
+}
 </style>

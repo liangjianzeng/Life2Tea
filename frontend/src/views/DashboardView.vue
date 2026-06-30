@@ -11,6 +11,25 @@
       </div>
     </div>
 
+    <!-- 图表区域 -->
+    <div class="charts-grid">
+      <div class="chart-panel full-width">
+        <div class="chart-header">
+          <h3>{{ t("dashboard.resourceHistory") }}</h3>
+          <div class="chart-tabs">
+            <button v-for="tab in resourceTabs" :key="tab"
+                    :class="['tab-btn', { active: activeResourceTab === tab }]"
+                    @click="activeResourceTab = tab">
+              {{ tab === '1h' ? t("dashboard.lastHour") : tab === '6h' ? t("dashboard.last6Hours") : t("dashboard.last24Hours") }}
+            </button>
+          </div>
+        </div>
+        <div class="chart-body">
+          <LineChart :data="resourceHistory" :unit="activeResourceTab === '1h' ? '%' : 'MB'" :maxValue="activeResourceTab === '1h' ? 100 : undefined" />
+        </div>
+      </div>
+    </div>
+
     <!-- 系统概览卡片 -->
     <div class="overview-cards">
       <div class="card">
@@ -51,7 +70,7 @@
         </div>
       </div>
 
-      <div class="card" v-if="metrics.gpu">
+      <div class="card" v-if="metrics.gpu && metrics.gpu.utilization != null">
         <div class="card-icon gpu-icon">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <rect x="2" y="6" width="20" height="12" rx="2" />
@@ -109,60 +128,12 @@
           </svg>
         </div>
         <div class="card-info">
-          <div class="card-value">{{ formatDiskIO(metrics.disk_io?.read_rate || 0) }}</div>
+          <div class="card-value" v-if="metrics.disk_io?.read_rate">{{ formatDiskIO(metrics.disk_io.read_rate) }}</div>
+          <div class="card-value" v-else>N/A</div>
           <div class="card-label">{{ t("dashboard.diskIO") }}</div>
         </div>
-        <div class="card-sub">{{ formatDiskIO(metrics.disk_io?.write_rate || 0) }} {{ t("dashboard.diskWrite") }}</div>
-      </div>
-    </div>
-
-    <!-- 图表区域 -->
-    <div class="charts-grid">
-      <div class="chart-panel">
-        <div class="chart-header">
-          <h3>{{ t("dashboard.resourceHistory") }}</h3>
-          <div class="chart-tabs">
-            <button v-for="tab in resourceTabs" :key="tab"
-                    :class="['tab-btn', { active: activeResourceTab === tab }]"
-                    @click="activeResourceTab = tab">
-              {{ tab === '1h' ? t("dashboard.lastHour") : tab === '6h' ? t("dashboard.last6Hours") : t("dashboard.last24Hours") }}
-            </button>
-          </div>
-        </div>
-        <div class="chart-body">
-          <LineChart :data="resourceHistory" :unit="activeResourceTab === '1h' ? '%' : 'MB'" :maxValue="activeResourceTab === '1h' ? 100 : undefined" />
-        </div>
-      </div>
-
-      <!-- GPU History Chart -->
-      <div class="chart-panel" v-if="hasGpuHistory">
-        <div class="chart-header">
-          <h3>{{ t("dashboard.gpuHistory") }}</h3>
-          <div class="chart-tabs">
-            <button v-for="tab in resourceTabs" :key="tab"
-                    :class="['tab-btn', { active: activeResourceTab === tab }]"
-                    @click="activeResourceTab = tab">
-              {{ tab === '1h' ? t("dashboard.lastHour") : tab === '6h' ? t("dashboard.last6Hours") : t("dashboard.last24Hours") }}
-            </button>
-          </div>
-        </div>
-        <div class="chart-body">
-          <LineChart :data="gpuHistoryData" :unit="'%'" :maxValue="100" />
-        </div>
-      </div>
-
-      <div class="chart-panel">
-        <div class="chart-header">
-          <h3>{{ t("dashboard.latencyDistribution") }}</h3>
-        </div>
-        <div class="chart-body">
-          <div class="percentiles">
-            <div class="p-item" v-for="p in perfMetrics" :key="p.label">
-              <span class="p-label">{{ p.label }}</span>
-              <span class="p-value">{{ p.value }}ms</span>
-            </div>
-          </div>
-        </div>
+        <div class="card-sub" v-if="metrics.disk_io?.write_rate">{{ formatDiskIO(metrics.disk_io.write_rate) }} {{ t("dashboard.diskWrite") }}</div>
+        <div class="card-sub" v-else>-</div>
       </div>
     </div>
 
@@ -226,6 +197,21 @@
           <h4>{{ t("dashboard.modelMetrics") }}</h4>
           <p class="coming-soon">{{ t("dashboard.comingSoon") }}</p>
           <p class="info-desc">{{ t("dashboard.modelDesc") }}</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 延迟分布 -->
+    <div class="chart-panel">
+      <div class="chart-header">
+        <h3>{{ t("dashboard.latencyDistribution") }}</h3>
+      </div>
+      <div class="chart-body">
+        <div class="percentiles">
+          <div class="p-item" v-for="p in perfMetrics" :key="p.label">
+            <span class="p-label">{{ p.label }}</span>
+            <span class="p-value">{{ p.value }}ms</span>
+          </div>
         </div>
       </div>
     </div>
@@ -295,19 +281,6 @@ const gpuMemoryPercent = computed(() => {
   return Math.round((metrics.value.gpu.memory_used / metrics.value.gpu.memory_total) * 100);
 });
 
-const hasGpuHistory = computed(() => {
-  return resourceHistory.value.some((d: any) => d.gpu != null);
-});
-
-const gpuHistoryData = computed(() => {
-  return resourceHistory.value
-    .filter((d: any) => d.gpu != null)
-    .map((d: any) => ({
-      timestamp: d.timestamp,
-      gpu: d.gpu.utilization,
-    }));
-});
-
 // ── Format helpers ──
 function formatMemory(used: number, total: number): string {
   if (!total) return "-";
@@ -333,7 +306,7 @@ function formatDiskIO(bytesPerSec: number): string {
   if (bytesPerSec > 1024 * 1024 * 1024) return (bytesPerSec / 1024 / 1024 / 1024).toFixed(2) + " GB/s";
   if (bytesPerSec > 1024 * 1024) return (bytesPerSec / 1024 / 1024).toFixed(2) + " MB/s";
   if (bytesPerSec > 1024) return (bytesPerSec / 1024).toFixed(2) + " KB/s";
-  return bytesPerSec + " B/s";
+  return bytesPerSec.toFixed(1) + " B/s";
 }
 
 function formatTime(ts: string | null): string {
@@ -551,6 +524,10 @@ onUnmounted(() => {
   border: 1px solid #2d2d4a;
   border-radius: 12px;
   overflow: hidden;
+}
+
+.chart-panel.full-width {
+  grid-column: 1 / -1;
 }
 
 .chart-header {
@@ -775,13 +752,74 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
+/* Mobile responsive */
 @media (max-width: 768px) {
+  .dashboard-view {
+    padding: 12px;
+  }
+
   .charts-grid {
     grid-template-columns: 1fr;
   }
 
   .overview-cards {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .info-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .card {
+    padding: 10px;
+  }
+
+  .card-value {
+    font-size: 1.1em;
+  }
+
+  .card-icon {
+    width: 36px;
+    height: 36px;
+  }
+}
+
+@media (max-width: 480px) {
+  .overview-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .card {
+    padding: 12px;
+    gap: 10px;
+  }
+
+  .card-value {
+    font-size: 1em;
+  }
+
+  .card-icon {
+    width: 40px;
+    height: 40px;
+  }
+
+  .card-info {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .card-sub,
+  .card-trend {
+    display: none;
+  }
+}
+
+/* Mobile dashboard header */
+@media (max-width: 480px) {
+  .dashboard-header {
+    flex-direction: column;
+    gap: 12px;
+    align-items: flex-start;
   }
 }
 </style>

@@ -181,6 +181,12 @@ async def lifespan(app: FastAPI):
         app.state.model_registry = ModelRegistry(_get_models_dir(), config_mgr=app.state.config_mgr)
         from app.core.routing import SystemRouter
         app.state.system_router = SystemRouter()
+        # Initialize ModelRouter for unified routing
+        from app.core.model_router import init_model_router
+        app.state.model_router = init_model_router(
+            config_mgr=app.state.config_mgr,
+            stats_service=app.state.stats_service,
+        )
     except Exception as e:
         print(f"[LIFECYCLE] Error during initialization: {e}", flush=True)
         raise
@@ -224,6 +230,7 @@ async def lifespan(app: FastAPI):
     from app.routers import chat_router, metrics_router, logs_router, routing_router
     from app.routers import auth_router, stats_router
     from app.routers.log_router import router as log_router
+    from app.routers.model_router_router import router as model_router_router
 
     app.include_router(config_router, prefix="/api/config", tags=["Config"])
     app.include_router(models_router, prefix="/api/models", tags=["Models"])
@@ -235,6 +242,7 @@ async def lifespan(app: FastAPI):
     app.include_router(routing_router, prefix="/api/router", tags=["Router"])
     app.include_router(auth_router, prefix="/api/auth", tags=["Auth"])
     app.include_router(stats_router.router)
+    app.include_router(model_router_router, prefix="/api/model-router", tags=["ModelRouter"])
     print("[LIFECYCLE] Routers registered, total routes:", len(app.routes), flush=True)
     # Print all routes that have a path attribute
     for r in app.routes:
@@ -277,6 +285,7 @@ app.add_middleware(StatsMiddleware)
 _LOCAL_ORIGINS = [
     "http://127.0.0.1:5005",
     "http://localhost:5005",
+    "http://100.81.83.59:5005",
     "http://127.0.0.1:3003",
     "http://localhost:3003",
     "null",  # file:// origin serialized by some Electron shells

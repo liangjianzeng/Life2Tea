@@ -27,6 +27,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/openapi.json",
         "/health",
         "/api/health",
+        "/api/config/dirs/list",
+        "/api/config/dirs/exists",
         "/api/stats/system",
         "/api/stats/resources",
         "/api/stats/dashboard",

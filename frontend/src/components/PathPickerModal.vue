@@ -27,7 +27,7 @@
           :disabled="!currentPath"
           @click="handleSelect(currentPath)"
         >
-          {{ t("settings.picker.select") }}
+          选择目录
         </button>
       </div>
     </div>
@@ -71,11 +71,16 @@ const currentPath = ref("");
 watch(() => props.modelValue, (val) => {
   if (val) {
     selectedFile.value = "";
+    currentPath.value = props.initialPath || "";
   }
 });
 
 function handleSelect(path: string) {
-  selectedFile.value = path;
+  if (props.allowFile) {
+    selectedFile.value = path;
+  } else {
+    currentPath.value = path;
+  }
   emit("select", path);
   emit("update:modelValue", false);
 }

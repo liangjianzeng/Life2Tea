@@ -18,10 +18,11 @@
             {{ t("models.running", { port: m.instance.port }) }}
           </span>
           <span v-else class="model-status stopped">{{ t("models.stopped") }}</span>
+          <span v-if="m.disabled" class="model-disabled">已禁用</span>
         </div>
         <div class="model-actions">
           <button
-            v-if="!m.instance"
+            v-if="!m.instance && !m.disabled"
             @click="loadModel(m)"
             :disabled="loadingModel === m.family"
             class="btn-load"
@@ -29,7 +30,15 @@
             {{ loadingModel === m.family ? t("models.loading") : t("models.load") }}
           </button>
           <button
-            v-else
+            v-else-if="!m.instance && m.disabled"
+            @click="enableModel(m)"
+            :disabled="loadingModel === m.family"
+            class="btn-enable"
+          >
+            启用模型
+          </button>
+          <button
+            v-else-if="m.instance"
             @click="unloadModel(m)"
             :disabled="loadingModel === m.family"
             class="btn-unload"
@@ -38,6 +47,14 @@
           </button>
           <button @click="showConfig(m)" class="btn-config">
             ⚙️ 配置
+          </button>
+          <button
+            v-if="!m.disabled"
+            @click="disableModel(m)"
+            class="btn-disable"
+            title="禁用模型（防止自动加载）"
+          >
+            禁用
           </button>
         </div>
       </div>
@@ -200,6 +217,7 @@ interface Model {
   params_b: number;
   default_port: number;
   plugin_name: string;
+  disabled?: boolean;
   instance: null | {
     plugin_name: string;
     pid: number;
@@ -285,6 +303,50 @@ async function unloadModel(m: Model) {
     }
   } catch (e: any) {
     alert(t("models.errorUnload", { msg: e.message }));
+  } finally {
+    loadingModel.value = null;
+  }
+}
+
+async function disableModel(m: Model) {
+  if (!confirm(`确定要禁用模型 ${m.display} 吗？禁用后不会被系统自动加载。`)) return;
+
+  loadingModel.value = m.family;
+  try {
+    const res = await fetch(`/api/models/${m.family}/disable`, {
+      method: "POST",
+      credentials: "include",
+    });
+    const data = await res.json();
+    if (data.ok) {
+      await refresh();
+      alert(t("models.disabled", { name: m.display }));
+    } else {
+      alert(t("models.errorDisable", { msg: data.error || "Unknown error" }));
+    }
+  } catch (e: any) {
+    alert(t("models.errorDisable", { msg: e.message }));
+  } finally {
+    loadingModel.value = null;
+  }
+}
+
+async function enableModel(m: Model) {
+  loadingModel.value = m.family;
+  try {
+    const res = await fetch(`/api/models/${m.family}/enable`, {
+      method: "POST",
+      credentials: "include",
+    });
+    const data = await res.json();
+    if (data.ok) {
+      await refresh();
+      alert(t("models.enabled", { name: m.display }));
+    } else {
+      alert(t("models.errorEnable", { msg: data.error || "Unknown error" }));
+    }
+  } catch (e: any) {
+    alert(t("models.errorEnable", { msg: e.message }));
   } finally {
     loadingModel.value = null;
   }
@@ -515,6 +577,16 @@ onMounted(scan);
   color: #f44336;
 }
 
+.model-disabled {
+  font-size: 0.75em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #555;
+  color: #aaa;
+  margin-top: 2px;
+  display: inline-block;
+}
+
 .model-actions {
   display: flex;
   gap: 8px;
@@ -557,6 +629,31 @@ onMounted(scan);
 
 .btn-config:hover {
   background: #6b5cc4;
+}
+
+.btn-disable {
+  padding: 6px 12px;
+  background: #ff9800;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85em;
+}
+
+.btn-enable {
+  padding: 6px 12px;
+  background: #4caf50;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9em;
+}
+
+.btn-enable:hover,
+.btn-disable:hover {
+  opacity: 0.9;
 }
 
 .modal-overlay {

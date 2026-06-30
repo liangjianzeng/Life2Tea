@@ -23,6 +23,10 @@
     <!-- Content area -->
     <div class="content">
       <div class="path-hint">{{ getPathHint }}</div>
+      <div class="path-bar" v-if="currentPath">
+        <span class="path-text">{{ currentPath }}</span>
+        <button class="select-dir-btn" @click="selectCurrentDir">选择此目录</button>
+      </div>
       <div v-if="loading" class="loading">加载中...</div>
       <div v-else-if="error" class="error">{{ error }}</div>
       <div v-else-if="!dirs.length && !files.length" class="empty">{{ t("settings.picker.empty") }}</div>
@@ -32,7 +36,7 @@
           v-for="dir in dirs"
           :key="'d-' + dir"
           class="item dir-item"
-          @click="openDir(dir)"
+          @click="handleDirClick(dir)"
         >
           <span class="icon folder">📁</span>
           <span class="name">{{ dir }}</span>
@@ -124,13 +128,26 @@ async function loadDir(path: string) {
   }
 }
 
-function openDir(name: string) {
+function handleDirClick(name: string) {
+  // If in directory mode, emit select on directory click
+  if (!props.allowFile) {
+    const fullPath = currentPath.value
+      ? currentPath.value.replace(/\\/g, "/") + "/" + name
+      : name;
+    emit("select", fullPath.replace(/\/+/g, "/"));
+    return;
+  }
   const next = currentPath.value
     ? currentPath.value.replace(/\\/g, "/") + "/" + name
     : name;
   // Normalize path separators
   currentPath.value = next.replace(/\/+/g, "/");
   loadDir(currentPath.value);
+}
+
+// Keep openDir for backwards compatibility
+function openDir(name: string) {
+  handleDirClick(name);
 }
 
 function navigateTo(action: string) {
@@ -171,6 +188,10 @@ function selectFile(name: string) {
   emit("select", fullPath.replace(/\/+/g, "/"));
 }
 
+function selectCurrentDir() {
+  emit("select", currentPath.value);
+}
+
 function getFileClass(file: string): string {
   const ext = file.split(".").pop()?.toLowerCase();
   if (["exe", "sh", "bat", "cmd", "bin"].includes(ext || "")) return "exe";
@@ -194,9 +215,11 @@ function isModelFile(file: string): boolean {
 }
 
 onMounted(() => {
-  if (currentPath.value) {
-    loadDir(currentPath.value);
-  }
+  // Load initial path or default root if empty
+  // Use '/' for Linux, 'C:' for Windows as default
+  const path = currentPath.value || '/';
+  currentPath.value = path;
+  loadDir(path);
 });
 </script>
 
@@ -289,6 +312,42 @@ onMounted(() => {
   font-size: 0.8em;
   color: #a0a0c0;
   font-style: italic;
+}
+
+.path-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 12px;
+  background: rgba(83, 74, 183, 0.1);
+  border-bottom: 1px solid #2d2d4a;
+  margin-bottom: 4px;
+}
+
+.path-text {
+  font-size: 0.75em;
+  color: #7c5cff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.select-dir-btn {
+  padding: 3px 10px;
+  background: #534ab7;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.75em;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.select-dir-btn:hover {
+  background: #6b5cc4;
 }
 
 .loading,
