@@ -247,17 +247,24 @@ async def load_model(
                         if "llama-server" in proc.name().lower():
                             from ..plugins.lifecycle import PluginStatus, PluginInstance
                             inst = lifecycle.get_instance(family)
-                            if not inst:
-                                inst = PluginInstance(
-                                    plugin_name=family,
-                                    plugin_type="model",
-                                    pid=int(pid_running),
-                                    process=None,
-                                    port=port,
-                                    status=PluginStatus.RUNNING,
-                                    health_endpoint="/health",
-                                )
-                                lifecycle._instances[family] = inst
+                            if inst:
+                                # Instance exists in registry and process is alive on the port
+                                return {"ok": True, "instance": inst.to_dict(), "note": "Already running (port in use)"}
+                            # Process is alive on the port but no registry entry —
+                            # this means the old instance was not properly cleaned up
+                            # (e.g. launcher PID killed but llama-server child survived).
+                            # Register the surviving process so the frontend sees it,
+                            # then return it instead of trying to start a duplicate.
+                            inst = PluginInstance(
+                                plugin_name=family,
+                                plugin_type="model",
+                                pid=int(pid_running),
+                                process=None,
+                                port=port,
+                                status=PluginStatus.RUNNING,
+                                health_endpoint="/health",
+                            )
+                            lifecycle._instances[family] = inst
                             return {"ok": True, "instance": inst.to_dict(), "note": "Already running (port in use)"}
                     except Exception:
                         pass

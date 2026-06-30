@@ -21,7 +21,9 @@ router = APIRouter()
 
 @router.get("", summary="Get all plugin stats")
 async def get_all_stats(collector: MetricsCollector = Depends(get_metrics_collector)):
-    return {"stats": collector.get_all_stats()}
+    stats = collector.get_all_stats()
+    collector.info("router", f"Requested plugin stats: {len(stats)} plugins")
+    return {"stats": stats}
 
 
 @router.get("/{plugin_name}", summary="Get stats for a specific plugin")

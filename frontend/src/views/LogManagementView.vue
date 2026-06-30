@@ -98,7 +98,9 @@ async function loadSummary() {
     const res = await fetch("/api/logs/summary?days=30", { credentials: "include" });
     if (res.ok) {
       const data = await res.json();
-      logSummary.value = data.days || [];
+      logSummary.value = (data.days || [])
+        .filter((d: any) => d.total > 0)
+        .sort((a: any, b: any) => (b.date > a.date ? 1 : -1));
     }
   } catch (e) {
     console.error("Failed to load summary:", e);

@@ -98,6 +98,22 @@
         </div>
         <div class="card-sub">{{ formatNetwork(metrics.network.bytes_recv) }} {{ t("dashboard.netInbound") }}</div>
       </div>
+
+      <!-- Disk IO Card -->
+      <div class="card">
+        <div class="card-icon disk-icon">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <ellipse cx="12" cy="12" rx="10" ry="4" />
+            <path d="M2 12v4c0 2.2 4.5 4 10 4s10-1.8 10-4v-4" />
+            <ellipse cx="12" cy="8" rx="10" ry="4" />
+          </svg>
+        </div>
+        <div class="card-info">
+          <div class="card-value">{{ formatDiskIO(metrics.disk_io?.read_rate || 0) }}</div>
+          <div class="card-label">{{ t("dashboard.diskIO") }}</div>
+        </div>
+        <div class="card-sub">{{ formatDiskIO(metrics.disk_io?.write_rate || 0) }} {{ t("dashboard.diskWrite") }}</div>
+      </div>
     </div>
 
     <!-- 图表区域 -->
@@ -218,7 +234,6 @@
     <div class="chart-panel">
       <div class="chart-header">
         <h3>{{ t("dashboard.recentLogs") }}</h3>
-        <LogViewer :logs="recentLogs" />
       </div>
       <div class="chart-body logs-body">
         <div v-if="recentLogs.length === 0" class="empty-logs">{{ t("dashboard.noLogs") }}</div>
@@ -240,7 +255,6 @@ import { ref, onMounted, onUnmounted, computed } from "vue";
 import { useI18n } from "vue-i18n";
 import { getStatsDashboard, getSystemMetrics, getApiKeyStats, getPerformanceMetrics, getResourceUsage, getRecentLogs } from "../services/stats";
 import LineChart from "../components/LineChart.vue";
-import LogViewer from "../components/LogViewer.vue";
 
 const { t } = useI18n();
 
@@ -249,6 +263,7 @@ const metrics = ref<any>({
   cpu: 0,
   memory: { used: 0, total: 0 },
   disk: { used: 0, total: 0 },
+  disk_io: { read_rate: 0, write_rate: 0 },
   network: { bytes_sent: 0, bytes_recv: 0 },
   gpu: null,
 });
@@ -311,6 +326,14 @@ function formatNetwork(bytes: number): string {
   if (bytes > 1024 * 1024) return (bytes / 1024 / 1024).toFixed(1) + " MB";
   if (bytes > 1024) return (bytes / 1024).toFixed(1) + " KB";
   return bytes + " B";
+}
+
+function formatDiskIO(bytesPerSec: number): string {
+  if (!bytesPerSec) return "0 B/s";
+  if (bytesPerSec > 1024 * 1024 * 1024) return (bytesPerSec / 1024 / 1024 / 1024).toFixed(2) + " GB/s";
+  if (bytesPerSec > 1024 * 1024) return (bytesPerSec / 1024 / 1024).toFixed(2) + " MB/s";
+  if (bytesPerSec > 1024) return (bytesPerSec / 1024).toFixed(2) + " KB/s";
+  return bytesPerSec + " B/s";
 }
 
 function formatTime(ts: string | null): string {
@@ -466,6 +489,7 @@ onUnmounted(() => {
 .gpu-icon { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
 .req-icon { background: rgba(239, 68, 68, 0.15); color: #f87171; }
 .net-icon { background: rgba(59, 130, 246, 0.15); color: #60a5fa; }
+.disk-icon { background: rgba(139, 92, 246, 0.15); color: #a78bfa; }
 
 .card-info {
   flex: 1;

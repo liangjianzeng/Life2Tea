@@ -27,6 +27,16 @@ class AuthMiddleware(BaseHTTPMiddleware):
         "/openapi.json",
         "/health",
         "/api/health",
+        "/api/stats/system",
+        "/api/stats/resources",
+        "/api/stats/dashboard",
+        "/api/stats/performance",
+        "/api/stats/api-keys",
+        "/api/stats/requests",
+        "/api/stats/recent-logs",
+        "/api/stats/key-detail",
+        "/api/stats/token-usage",
+        "/api/stats/model-metrics",
     }
 
     async def dispatch(self, request: Request, call_next):
@@ -34,9 +44,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
         method = request.method
 
         print(f"*** AuthMiddleware DISPATCH CALLED *** {method} {path}", flush=True)
+        print(f"*** EXCLUDE_PATHS: {self.EXCLUDE_PATHS}", flush=True)
 
         # Skip auth for excluded paths and auth endpoints
-        if any(path.startswith(excl) for excl in self.EXCLUDE_PATHS):
+        print(f"[AuthMiddleware] Checking path: {path}", flush=True)
+        print(f"[AuthMiddleware] EXCLUDE_PATHS: {self.EXCLUDE_PATHS}", flush=True)
+        if path in self.EXCLUDE_PATHS:
             print(f"[AuthMiddleware] EXCLUDED: {path}", flush=True)
             return await call_next(request)
 

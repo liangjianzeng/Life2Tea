@@ -14,6 +14,7 @@ Endpoints:
 
 import json
 import uuid
+import time
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -119,9 +120,62 @@ async def chat_completions(body: ChatCompletionBody, request: Request):
     messages = [m.dict() for m in body.messages]
     handler = _get_handler(request, messages, model_pref=body.model)
 
+    # Log generation start
+    if hasattr(request.app.state, "logging_service"):
+        from ..core.logging_service import get_logging_service
+        logging_service = get_logging_service()
+
+        # Try to get user_id from request state or use default
+        current_user = getattr(request.state, "current_user", None)
+        user_id = current_user.id if current_user else "anonymous"
+
+        session_id = getattr(request.state, "session_id", None)
+        if not session_id:
+            session_id = "anonymous"
+
+        # Get conversation_id from messages or create one
+        conversation_id = getattr(request.state, "conversation_id", None)
+        if not conversation_id:
+            # Try to get from last user message or create new
+            for msg in reversed(messages):
+                if msg["role"] == "user":
+                    conversation_id = getattr(request.state, "conversation_id", None)
+                    break
+            if not conversation_id:
+                from datetime import datetime
+                conv_id = str(uuid.uuid4())
+                conversation_id = conv_id
+
+        # Log generation start
+        log = logging_service.log_generation(
+            user_id=user_id,
+            conversation_id=conversation_id,
+            session_id=session_id,
+            model_name=body.model or "unknown",
+            provider="llama.cpp",
+            temperature=body.temperature,
+            top_p=body.top_p,
+            max_tokens=body.max_tokens,
+            retry_count=0,
+        )
+        request.state.generation_log_id = log.id
 
     if body.stream:
         async def gen():
+            start_time = time.time()
+
+            # Log streaming start
+            if hasattr(request.state, "generation_log_id"):
+                from ..core.logging_service import get_logging_service
+                logging_service = get_logging_service()
+                try:
+                    logging_service.update_generation(
+                        log_id=request.state.generation_log_id,
+                        prompt_tokens=len(messages),  # Approximate
+                    )
+                except:
+                    pass
+
             async for chunk in handler.chat_completion_stream(
                 messages=messages,
                 max_tokens=body.max_tokens,
@@ -132,8 +186,23 @@ async def chat_completions(body: ChatCompletionBody, request: Request):
                 stop=body.stop,
             ):
                 yield chunk
+
+            # Log streaming completion
+            if hasattr(request.state, "generation_log_id"):
+                from ..core.logging_service import get_logging_service
+                logging_service = get_logging_service()
+                try:
+                    elapsed_ms = (time.time() - start_time) * 1000
+                    logging_service.update_generation(
+                        log_id=request.state.generation_log_id,
+                        generation_time_ms=elapsed_ms,
+                        completion_tokens=0,  # Will be counted from actual response
+                    )
+                except:
+                    pass
         return StreamingResponse(gen(), media_type="text/event-stream")
 
+    start_time = time.time()
     result = await handler.chat_completion(
         messages=messages,
         stream=False,
@@ -146,6 +215,25 @@ async def chat_completions(body: ChatCompletionBody, request: Request):
     )
     if "error" in result:
         raise HTTPException(status_code=500, detail=result["error"])
+
+    # Log completion
+    if hasattr(request.app.state, "logging_service"):
+        from ..core.logging_service import get_logging_service
+        logging_service = get_logging_service()
+        try:
+            elapsed_ms = (time.time() - start_time) * 1000
+
+            # Estimate completion tokens from response length
+            completion_tokens = len(result.get("content", ""))
+
+            logging_service.update_generation(
+                log_id=request.state.generation_log_id,
+                completion_tokens=completion_tokens,
+                generation_time_ms=elapsed_ms,
+            )
+        except:
+            pass
+
     return result
 
 

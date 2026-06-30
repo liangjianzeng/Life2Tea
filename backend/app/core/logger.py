@@ -185,7 +185,7 @@ class LoggerManager:
         keyword: str | None = None,
         limit: int = 500,
         offset: int = 0,
-        order: str = "desc",
+        order: str = "asc",
     ):
         if not date_from:
             date_from = date.today().isoformat()
@@ -223,11 +223,13 @@ class LoggerManager:
         filtered.sort(key=lambda x: x.get("ts", ""), reverse=(order != "asc"))
         total = len(filtered)
         page = filtered[offset : offset + limit]
+
+        # Return entries (not items) for frontend compatibility
         return {
             "total": total,
             "offset": offset,
             "limit": limit,
-            "items": page,
+            "entries": page,
             "levels": sorted({e.get("level") for e in page if e.get("level")}),
             "models": sorted({e.get("model") for e in page if e.get("model")}),
             "plugins": sorted({e.get("plugin") for e in page if e.get("plugin")}),
@@ -243,7 +245,9 @@ class LoggerManager:
             start.isoformat(), today.isoformat(),
             limit=10000, offset=0, order="asc",
         )
-        items = q["items"]
+        items = q["entries"]
+
+        # Build summary structure for frontend
         by_day = {}
         by_level = {}
         by_model = {}
@@ -256,11 +260,23 @@ class LoggerManager:
             by_model[m] = by_model.get(m, 0) + 1
             p = e.get("plugin") or "(none)"
             by_plugin[p] = by_plugin.get(p, 0) + 1
+
+        # Build days array (YYYY-MM-DD) for frontend
+        days_array = []
+        current = start
+        for _ in range(days):
+            day_str = current.isoformat()
+            days_array.append({
+                "date": day_str,
+                "total": by_day.get(day_str, 0),
+                "errors": by_level.get("ERROR", 0),
+                "warnings": by_level.get("WARNING", 0),
+            })
+            current += timedelta(days=1)
+
         return {
-            "days": days,
+            "days": days_array,
             "total": len(items),
-            "today": by_day.get(today.isoformat(), 0),
-            "by_day": by_day,
             "by_level": by_level,
             "by_model": by_model,
             "by_plugin": by_plugin,

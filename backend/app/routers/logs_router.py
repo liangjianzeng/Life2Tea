@@ -53,7 +53,9 @@ async def list_days(
     include_archive: bool = True,
     mgr: LoggerManager = Depends(get_logger_mgr),
 ):
-    return {"days": mgr.list_days(include_archive=include_archive)}
+    days = mgr.list_days(include_archive=include_archive)
+    mgr.info("router", f"Listed log days: {len(days)}")
+    return {"days": days}
 
 
 @router.get("/files", summary="List log files")
@@ -69,7 +71,7 @@ async def query_logs(
     body: QueryBody,
     mgr: LoggerManager = Depends(get_logger_mgr),
 ):
-    return mgr.query(
+    result = mgr.query(
         date_from=body.date_from,
         date_to=body.date_to,
         level=body.level,
@@ -81,6 +83,8 @@ async def query_logs(
         offset=body.offset,
         order=body.order,
     )
+    mgr.info("router", f"Query logs: {result['total']} entries from {body.date_from}")
+    return result
 
 
 @router.get("/summary", summary="Get log summary for recent days")
@@ -88,7 +92,11 @@ async def get_log_summary(
     days: int = 7,
     mgr: LoggerManager = Depends(get_logger_mgr),
 ):
-    return mgr.summary(days=days)
+    summary = mgr.summary(days=days)
+    # Ensure days array is present (for frontend compatibility)
+    if "days" not in summary:
+        summary["days"] = []
+    return summary
 
 
 @router.post("/delete", summary="Delete log for a specific day")
@@ -97,6 +105,10 @@ async def delete_logs(
     mgr: LoggerManager = Depends(get_logger_mgr),
 ):
     ok = mgr.delete_day(body.day)
+    if ok:
+        mgr.info("router", f"Deleted log file for {body.day}")
+    else:
+        mgr.warn("router", f"Failed to delete log file for {body.day}")
     return {"ok": ok}
 
 
@@ -105,7 +117,9 @@ async def cleanup_logs(
     body: CleanupBody,
     mgr: LoggerManager = Depends(get_logger_mgr),
 ):
-    return mgr.cleanup_before(body.days)
+    result = mgr.cleanup_before(body.days)
+    mgr.info("router", f"Cleanup: removed {result['count']} log files")
+    return result
 
 
 @router.post("/archive", summary="Archive log for a day")
@@ -113,4 +127,9 @@ async def archive_logs(
     body: ArchiveBody,
     mgr: LoggerManager = Depends(get_logger_mgr),
 ):
-    return mgr.archive_day(body.day, delete_source=body.delete_source)
+    result = mgr.archive_day(body.day, delete_source=body.delete_source)
+    if result.get("ok"):
+        mgr.info("router", f"Archived log file for {body.day}")
+    else:
+        mgr.warn("router", f"Failed to archive log file for {body.day}: {result.get('error', 'Unknown error')}")
+    return result

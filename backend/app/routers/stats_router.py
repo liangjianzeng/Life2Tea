@@ -102,11 +102,3 @@ async def get_api_key_detail(
 ):
     """Get detailed request history for an API key"""
     return stats_service.get_api_key_detail(key_id, limit)
-
-
-@router.get("/api/stats/token-usage")
-async def get_token_usage(
-    stats_service: StatsService = Depends(get_stats_service)
-):
-    """Get token usage statistics (placeholder)"""
-    return stats_service.get_token_usage()

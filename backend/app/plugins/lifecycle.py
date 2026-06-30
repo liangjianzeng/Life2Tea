@@ -103,10 +103,34 @@ class PluginLifecycleManager:
     def get_instance(self, plugin_name: str) -> Optional[PluginInstance]:
         with self._lock:
             inst = self._instances.get(plugin_name)
-            if inst and inst.process and inst.process.poll() is None:
+            if not inst:
+                return None
+            # For powershell-launched processes, the launcher may exit but the
+            # child (llama-server) continues running.  Rely on PID-based check
+            # and health endpoint instead of the launcher process.
+            if inst.process and inst.process.poll() is None:
+                # Launcher still alive
                 return inst
-            if inst:
-                inst.status = PluginStatus.STOPPED
+            # Launcher exited — check if the actual server is still alive via PID
+            try:
+                ps = psutil.Process(inst.pid)
+                if ps.status() not in (psutil.STATUS_ZOMBIE, psutil.STATUS_SLEEPING):
+                    # Process is alive (might be slightly different PID if
+                    # Start-Process spawns a child, but close enough for
+                    # existence check — also verify by port)
+                    return inst
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+            # Fallback: try to reach the health endpoint to confirm the
+            # server is actually up even though our launcher exited.
+            try:
+                url = f"http://{inst.host}:{inst.port}{inst.health_endpoint}"
+                req = urllib.request.urlopen(url, timeout=2)
+                if req.status == 200:
+                    return inst
+            except Exception:
+                pass
+            inst.status = PluginStatus.STOPPED
             return None
 
     def list_instances(self) -> List[dict]:
@@ -274,19 +298,50 @@ class PluginLifecycleManager:
 
     def _kill_instance(self, inst: PluginInstance) -> bool:
         inst.status = PluginStatus.STOPPING
+        # Collect the full process tree to kill (launcher + children like llama-server)
+        children = []
+        try:
+            parent = psutil.Process(inst.pid)
+            children = parent.children(recursive=True)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+
+        # Terminate children first
+        for child in children:
+            try:
+                child.terminate()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+
+        # Terminate the parent
         try:
             proc = psutil.Process(inst.pid)
             proc.terminate()
-            gone, alive = psutil.wait_procs([proc], timeout=8)
-            if alive:
-                for p in alive:
-                    try:
-                        p.kill()
-                        p.wait(timeout=5)
-                    except Exception:
-                        pass
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
+
+        # Wait for all (children + parent) to exit
+        gone_children, alive_children = psutil.wait_procs(children, timeout=8)
+        gone_parent, alive_parent = psutil.wait_procs([psutil.Process(inst.pid)] if psutil.pid_exists(inst.pid) else [], timeout=8)
+
+        # Force kill any survivors
+        for p in alive_children + alive_parent:
+            try:
+                p.kill()
+                p.wait(timeout=5)
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.TimeoutExpired):
+                pass
+
+        # Also kill by process name as a safety net (handles orphaned children)
+        try:
+            subprocess.run(
+                ["taskkill", "/f", "/im", "llama-server.exe"],
+                capture_output=True, timeout=5,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except Exception:
+            pass
+
         inst.status = PluginStatus.STOPPED
         time.sleep(1)  # Allow VRAM release
         return True

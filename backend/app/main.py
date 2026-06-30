@@ -162,6 +162,10 @@ async def lifespan(app: FastAPI):
     app.state.db = get_db()
     app.state.user_service = get_user_service()
 
+    # Initialize logging service
+    from app.core.logging_service import init_logging_service
+    app.state.logging_service = init_logging_service(config_dir)
+
     # Initialize all managers and store them in app.state
     try:
         app.state.config_mgr = ConfigManager(config_dir)
@@ -219,6 +223,7 @@ async def lifespan(app: FastAPI):
     from app.routers import config_router, models_router, plugins_router
     from app.routers import chat_router, metrics_router, logs_router, routing_router
     from app.routers import auth_router, stats_router
+    from app.routers.log_router import router as log_router
 
     app.include_router(config_router, prefix="/api/config", tags=["Config"])
     app.include_router(models_router, prefix="/api/models", tags=["Models"])
@@ -226,6 +231,7 @@ async def lifespan(app: FastAPI):
     app.include_router(chat_router, prefix="/api/chat", tags=["Chat"])
     app.include_router(metrics_router, prefix="/api/metrics", tags=["Metrics"])
     app.include_router(logs_router, prefix="/api/logs", tags=["Logs"])
+    app.include_router(log_router, tags=["Logs"])
     app.include_router(routing_router, prefix="/api/router", tags=["Router"])
     app.include_router(auth_router, prefix="/api/auth", tags=["Auth"])
     app.include_router(stats_router.router)

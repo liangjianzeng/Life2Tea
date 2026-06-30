@@ -23,10 +23,29 @@ class StatsService:
 
     # ── Collectors ──────────────────────────────────────
 
+    def __init__(self, db: Database):
+        self.db = db
+        self._last_disk_io = None  # for computing disk IO rate
+
     def collect_system_metrics(self) -> Dict[str, Any]:
         """Collect current system metrics"""
         vmem = psutil.virtual_memory()
         net = psutil.net_io_counters()
+
+        # Disk IO counters (cumulative)
+        disk_io = psutil.disk_io_counters()
+        now = datetime.now()
+
+        disk_io_values = {"read_bytes": 0, "write_bytes": 0, "read_rate": 0.0, "write_rate": 0.0}
+        if disk_io:
+            disk_io_values["read_bytes"] = disk_io.read_bytes
+            disk_io_values["write_bytes"] = disk_io.write_bytes
+            if self._last_disk_io:
+                elapsed = (now - self._last_disk_io["time"]).total_seconds()
+                if elapsed > 0:
+                    disk_io_values["read_rate"] = (disk_io.read_bytes - self._last_disk_io["read_bytes"]) / elapsed
+                    disk_io_values["write_rate"] = (disk_io.write_bytes - self._last_disk_io["write_bytes"]) / elapsed
+        self._last_disk_io = {"time": now, "read_bytes": disk_io_values["read_bytes"], "write_bytes": disk_io_values["write_bytes"]}
 
         metrics = {
             "cpu": psutil.cpu_percent(interval=0.1),
@@ -40,11 +59,12 @@ class StatsService:
                 "used": psutil.disk_usage('/').used,
                 "percent": psutil.disk_usage('/').percent,
             },
+            "disk_io": disk_io_values,
             "network": {
                 "bytes_sent": net.bytes_sent,
                 "bytes_recv": net.bytes_recv,
             },
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": now.isoformat(),
             "gpu": None,
         }
 
@@ -77,13 +97,16 @@ class StatsService:
         """Persist a single metrics snapshot to DB."""
         conn = self.db.get_connection()
         try:
+            # Ensure disk_io columns exist (migration from older schema)
+            self._ensure_disk_io_columns(conn)
             conn.execute("""
                 INSERT INTO system_metrics
                 (timestamp, cpu_usage, memory_total, memory_used, memory_percent,
                  disk_total, disk_used, disk_percent,
                  network_bytes_sent, network_bytes_recv,
+                 disk_io_read_bytes, disk_io_write_bytes, disk_io_read_rate, disk_io_write_rate,
                  gpu_utilization, gpu_memory_used, gpu_memory_total)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 m["timestamp"],
                 m["cpu"],
@@ -95,6 +118,10 @@ class StatsService:
                 m["disk"]["percent"],
                 m["network"]["bytes_sent"],
                 m["network"]["bytes_recv"],
+                m.get("disk_io", {}).get("read_bytes", 0),
+                m.get("disk_io", {}).get("write_bytes", 0),
+                m.get("disk_io", {}).get("read_rate", 0),
+                m.get("disk_io", {}).get("write_rate", 0),
                 m["gpu"]["utilization"] if m["gpu"] else None,
                 m["gpu"]["memory_used"] if m["gpu"] else None,
                 m["gpu"]["memory_total"] if m["gpu"] else None,
@@ -155,30 +182,69 @@ class StatsService:
         end = self._now_iso()
         conn = self.db.get_connection()
         try:
-            cur = conn.execute(
-                """SELECT timestamp, cpu_usage, memory_used, memory_total,
-                          gpu_utilization, gpu_memory_used, gpu_memory_total
-                   FROM system_metrics
-                   WHERE timestamp >= ? AND timestamp <= ?
-                   ORDER BY timestamp""",
-                (start, end)
-            )
-            rows = cur.fetchall()
-            result = []
-            for r in rows:
-                gpu = None
-                if r[4] is not None:
-                    gpu = {
-                        "utilization": r[4],
-                        "memory_used": r[5],
-                        "memory_total": r[6],
-                    }
-                result.append({
-                    "timestamp": r[0],
-                    "cpu": r[1],
-                    "memory": {"used": r[2], "total": r[3]},
-                    "gpu": gpu,
-                })
+            # Check if disk_io columns exist
+            has_disk_io = False
+            try:
+                conn.execute("SELECT disk_io_read_rate FROM system_metrics")
+                has_disk_io = True
+            except sqlite3.OperationalError:
+                pass
+
+            if has_disk_io:
+                cur = conn.execute(
+                    """SELECT timestamp, cpu_usage, memory_used, memory_total,
+                              gpu_utilization, gpu_memory_used, gpu_memory_total,
+                              disk_io_read_rate, disk_io_write_rate
+                       FROM system_metrics
+                       WHERE timestamp >= ? AND timestamp <= ?
+                       ORDER BY timestamp""",
+                    (start, end)
+                )
+                rows = cur.fetchall()
+                result = []
+                for r in rows:
+                    gpu = None
+                    if r[4] is not None:
+                        gpu = {
+                            "utilization": r[4],
+                            "memory_used": r[5],
+                            "memory_total": r[6],
+                        }
+                    result.append({
+                        "timestamp": r[0],
+                        "cpu": r[1],
+                        "memory": {"used": r[2], "total": r[3]},
+                        "gpu": gpu,
+                        "disk_io": {
+                            "read_rate": r[7] or 0,
+                            "write_rate": r[8] or 0,
+                        },
+                    })
+            else:
+                cur = conn.execute(
+                    """SELECT timestamp, cpu_usage, memory_used, memory_total,
+                              gpu_utilization, gpu_memory_used, gpu_memory_total
+                       FROM system_metrics
+                       WHERE timestamp >= ? AND timestamp <= ?
+                       ORDER BY timestamp""",
+                    (start, end)
+                )
+                rows = cur.fetchall()
+                result = []
+                for r in rows:
+                    gpu = None
+                    if r[4] is not None:
+                        gpu = {
+                            "utilization": r[4],
+                            "memory_used": r[5],
+                            "memory_total": r[6],
+                        }
+                    result.append({
+                        "timestamp": r[0],
+                        "cpu": r[1],
+                        "memory": {"used": r[2], "total": r[3]},
+                        "gpu": gpu,
+                    })
             return {"data": result}
         finally:
             conn.close()
@@ -382,21 +448,114 @@ class StatsService:
         finally:
             conn.close()
 
-    def get_token_usage(self) -> Dict[str, Any]:
-        """Placeholder for token statistics.
-        Will be integrated with chat/model plugin later."""
-        return {
-            "data": {
-                "total_input_tokens": 0,
-                "total_output_tokens": 0,
-                "by_model": {},
-                "note": "Token stats will be available after chat plugin integration",
+    def get_token_usage(self, time_range: str = "today") -> Dict[str, Any]:
+        """Get token usage statistics."""
+        conn = self.db.get_connection()
+        try:
+            # Calculate time range
+            end_time = datetime.now()
+            if time_range == "today":
+                start_time = end_time.replace(hour=0, minute=0, second=0, microsecond=0)
+            elif time_range == "week":
+                start_time = end_time - timedelta(days=7)
+            elif time_range == "month":
+                start_time = end_time - timedelta(days=30)
+            else:
+                start_time = end_time - timedelta(days=1)
+
+            start_str = start_time.isoformat()
+            end_str = end_time.isoformat()
+
+            # Get token usage
+            query = """
+                SELECT
+                    SUM(input_tokens) as total_input,
+                    SUM(output_tokens) as total_output,
+                    model_family,
+                    model_name
+                FROM token_usage
+                WHERE timestamp BETWEEN ? AND ?
+                GROUP BY model_family, model_name
+            """
+            cursor = conn.execute(query, (start_str, end_str))
+            rows = cursor.fetchall()
+
+            total_input = sum(r[0] or 0 for r in rows)
+            total_output = sum(r[1] or 0 for r in rows)
+
+            by_model = {}
+            for row in rows:
+                model = row[2] or "unknown"
+                if model not in by_model:
+                    by_model[model] = {"input": 0, "output": 0, "family": row[3]}
+                by_model[model]["input"] += row[0] or 0
+                by_model[model]["output"] += row[1] or 0
+
+            return {
+                "period": time_range,
+                "data": {
+                    "total_input_tokens": total_input,
+                    "total_output_tokens": total_output,
+                    "by_model": by_model,
+                }
             }
-        }
+        except Exception as e:
+            print(f"Error getting token usage: {e}")
+            return {"period": time_range, "data": {"total_input_tokens": 0, "total_output_tokens": 0, "by_model": {}}}
+        finally:
+            conn.close()
 
     def get_model_metrics(self) -> Dict[str, Any]:
-        """Placeholder — integrate with model plugin later."""
-        return {"data": []}
+        """Get model running metrics."""
+        conn = self.db.get_connection()
+        try:
+            # Query system metrics for GPU/CPU utilization
+            query = """
+                SELECT timestamp, gpu_utilization, gpu_memory_used, gpu_memory_total,
+                       cpu_usage, memory_percent
+                FROM system_metrics
+                ORDER BY timestamp DESC
+                LIMIT 100
+            """
+            cursor = conn.execute(query)
+            rows = cursor.fetchall()
+
+            metrics = []
+            for row in rows:
+                metrics.append({
+                    "timestamp": row[0],
+                    "gpu_utilization": row[1],
+                    "gpu_memory_used": row[2],
+                    "gpu_memory_total": row[3],
+                    "cpu_usage": row[4],
+                    "memory_percent": row[5],
+                })
+
+            return {"data": metrics}
+        except Exception as e:
+            print(f"Error getting model metrics: {e}")
+            return {"data": []}
+        finally:
+            conn.close()
+
+    def _ensure_disk_io_columns(self, conn):
+        """Add disk_io columns if they don't exist (DB migration)."""
+        try:
+            conn.execute("ALTER TABLE system_metrics ADD COLUMN disk_io_read_bytes INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+        try:
+            conn.execute("ALTER TABLE system_metrics ADD COLUMN disk_io_write_bytes INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+        try:
+            conn.execute("ALTER TABLE system_metrics ADD COLUMN disk_io_read_rate REAL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+        try:
+            conn.execute("ALTER TABLE system_metrics ADD COLUMN disk_io_write_rate REAL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # column already exists
 
     # ── Internal helpers ────────────────────────────────
 
@@ -440,7 +599,11 @@ class StatsService:
                     network_bytes_recv INTEGER,
                     gpu_utilization REAL,
                     gpu_memory_used REAL,
-                    gpu_memory_total REAL
+                    gpu_memory_total REAL,
+                    disk_io_read_bytes INTEGER DEFAULT 0,
+                    disk_io_write_bytes INTEGER DEFAULT 0,
+                    disk_io_read_rate REAL DEFAULT 0,
+                    disk_io_write_rate REAL DEFAULT 0
                 )
             """)
             conn.execute("""
@@ -459,6 +622,20 @@ class StatsService:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     key_id INTEGER NOT NULL,
                     request_id INTEGER NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    FOREIGN KEY (key_id) REFERENCES api_keys(id),
+                    FOREIGN KEY (request_id) REFERENCES request_stats(id)
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS token_usage (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    key_id INTEGER,
+                    request_id INTEGER,
+                    model_family TEXT,
+                    model_name TEXT,
+                    input_tokens INTEGER DEFAULT 0,
+                    output_tokens INTEGER DEFAULT 0,
                     timestamp TEXT NOT NULL,
                     FOREIGN KEY (key_id) REFERENCES api_keys(id),
                     FOREIGN KEY (request_id) REFERENCES request_stats(id)
