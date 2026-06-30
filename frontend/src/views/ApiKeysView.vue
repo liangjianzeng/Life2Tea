@@ -226,7 +226,7 @@ async function createKey() {
     showMessage(t("settings.apiKeys.errorName"), "error");
     return;
   }
-  if (!newKey.value.scopes || newKey.value.scopes === "") {
+  if (!newKey.value.scopes || (Array.isArray(newKey.value.scopes) && newKey.value.scopes.length === 0)) {
     showMessage(t("settings.apiKeys.errorSelectScope"), "error");
     return;
   }
