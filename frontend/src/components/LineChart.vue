@@ -23,7 +23,7 @@ function initChart() {
 
   chartInstance = echarts.init(chartRef.value);
 
-  const hasGpu = props.data.some((d: any) => d.gpu !== null && d.gpu !== undefined);
+  const hasGpu = props.data.some((d: any) => d.gpu?.utilization != null && d.gpu?.utilization !== undefined);
 
   const series: any[] = [];
 

@@ -78,10 +78,17 @@ class StatsService:
             )
             if result.returncode == 0:
                 parts = result.stdout.strip().split('\n')[0].split(', ')
+                # Handle [N/A] values
+                def safe_float(val):
+                    try:
+                        return float(val)
+                    except (ValueError, TypeError):
+                        return None
+
                 metrics["gpu"] = {
-                    "utilization": float(parts[0]),
-                    "memory_used": float(parts[1]),
-                    "memory_total": float(parts[2]),
+                    "utilization": safe_float(parts[0]),
+                    "memory_used": safe_float(parts[1]),
+                    "memory_total": safe_float(parts[2]),
                 }
         except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
             metrics["gpu"] = None
