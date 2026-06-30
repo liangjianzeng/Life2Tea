@@ -123,26 +123,58 @@ function toggle() {
   .app-header {
     padding: 0 12px;
     height: 50px;
+    position: relative;
   }
-  
+
+  .app-header h1 {
+    font-size: 1em;
+    white-space: nowrap;
+  }
+
   .app-header nav {
+    display: flex;
+    overflow-x: auto;
+    white-space: nowrap;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    gap: 0;
+    position: absolute;
+    left: 12px;
+    right: 130px;
+    top: 50px;
+    background: #1a1a2e;
+    padding: 8px 0;
+    border-bottom: 1px solid #2d2d4a;
+  }
+
+  .app-header nav::-webkit-scrollbar {
     display: none;
   }
-  
-  .app-header .header-right {
-    flex: 1;
-    justify-content: flex-end;
+
+  .app-header nav a {
+    color: #a0a0c0;
+    text-decoration: none;
+    padding: 8px 14px;
+    font-size: 0.9em;
+    flex-shrink: 0;
   }
-  
+
+  .app-header .header-right {
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+  }
+
   .user-info {
     display: none;
   }
-  
+
   .logout-btn {
     padding: 6px 10px;
     font-size: 0.8em;
   }
-  
+
   .lang-btn {
     margin-left: 8px;
     padding: 6px 10px;
