@@ -59,7 +59,7 @@ class ModelRouter:
         self._load_state()
         
         # Common models to expose on unified endpoint
-        self._common_models = ["qwen3.6", "glm", "lfm2"]
+        self._common_models = ["qwen3.6", "glm", "lfm2", "ollama"]
         
     def _load_state(self):
         """Load router state from config file."""

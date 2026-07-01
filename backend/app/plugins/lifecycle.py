@@ -149,7 +149,11 @@ class PluginLifecycleManager:
         env: Optional[Dict[str, str]] = None,
         force: bool = False,
     ) -> PluginInstance:
-        """Start a plugin process. If already running, stop first."""
+        """Start a plugin process. If already running, stop first.
+
+        For Ollama backend plugins, uses the OllamaPlugin (no subprocess).
+        For all other backends, starts a subprocess as before.
+        """
         # Check if model is disabled
         if not force and self._is_plugin_disabled(plugin_name):
             raise RuntimeError(f"Model {plugin_name} is disabled. Enable it in settings first.")
@@ -160,6 +164,14 @@ class PluginLifecycleManager:
                 self._kill_instance(self._instances[plugin_name])
 
             log_file = os.path.join(self._log_dir, f"plugin_{plugin_name}.log")
+
+            # ── Ollama backend: use OllamaPlugin instead of subprocess ──
+            if plugin_type == "model" and self._is_ollama_backend(plugin_name):
+                return self._start_ollama_plugin(
+                    plugin_name, log_file, host, port, health_endpoint
+                )
+
+            # ── Standard subprocess backend (llama-server, etc.) ──
             proc_env = os.environ.copy()
             # Disable NVIDIA CUDA cache to avoid sandbox blocking
             proc_env["CUDA_CACHE_DISABLE"] = "1"
@@ -225,6 +237,123 @@ class PluginLifecycleManager:
             self._register_with_model_router(inst)
             
             return inst
+
+    def _is_ollama_backend(self, plugin_name: str) -> bool:
+        """Check if a plugin uses the Ollama backend."""
+        try:
+            from ..main import app
+            if hasattr(app.state, "config_mgr"):
+                cfg = app.state.config_mgr.get_plugin_config(plugin_name)
+                if cfg and cfg.get("backend") == "ollama":
+                    return True
+        except Exception:
+            pass
+        # Also check by name convention
+        return plugin_name.lower() in ("ollama",)
+
+    def _start_ollama_plugin(
+        self,
+        plugin_name: str,
+        log_file: str,
+        host: str = "127.0.0.1",
+        port: int = 0,
+        health_endpoint: str = "/health",
+    ) -> PluginInstance:
+        """Start an Ollama model plugin (no subprocess needed — connects to existing server)."""
+        import asyncio
+
+        print(f"[LIFECYCLE] Starting Ollama plugin: {plugin_name}", flush=True)
+
+        try:
+            from .ollama_plugin import OllamaPlugin
+            from .manifest import PluginManifest
+
+            # Build a minimal manifest for the Ollama plugin
+            ollama_host = host or "127.0.0.1"
+            ollama_port = port or 11434
+
+            manifest_data = {
+                "name": plugin_name,
+                "version": "1.0.0",
+                "type": "model",
+                "display": "Ollama",
+                "backend": "ollama",
+                "model_family": "ollama",
+                "host": ollama_host,
+                "port": ollama_port,
+                "entry": {
+                    "runtime": "ollama",
+                    "transport": "http",
+                },
+            }
+            manifest = PluginManifest.from_dict(manifest_data)
+
+            plugin = OllamaPlugin(manifest)
+            config = {"host": ollama_host, "port": ollama_port}
+
+            # Load the plugin (connects to or starts Ollama server)
+            # Use a separate thread to avoid event loop conflicts in FastAPI
+            import threading
+            load_result = {"error": None, "plugin": None}
+            
+            def _load_in_thread():
+                try:
+                    import asyncio
+                    loop = asyncio.new_event_loop()
+                    try:
+                        loop.run_until_complete(plugin.load(config))
+                    finally:
+                        loop.close()
+                    load_result["plugin"] = plugin
+                except Exception as e:
+                    load_result["error"] = e
+            
+            thread = threading.Thread(target=_load_in_thread, daemon=True)
+            thread.start()
+            thread.join(timeout=30)
+            
+            if load_result["error"]:
+                raise RuntimeError(f"Failed to start Ollama plugin: {load_result['error']}")
+            if not load_result["plugin"] or not plugin._loaded:
+                raise RuntimeError(f"Ollama plugin failed to load at {ollama_host}:{ollama_port}")
+
+            if not plugin._loaded:
+                raise RuntimeError(f"Ollama plugin failed to load at {ollama_host}:{ollama_port}")
+
+            ep_host, ep_port = plugin.endpoint
+
+            # Create a PluginInstance for tracking (no real PID since we connect to existing server)
+            inst = PluginInstance(
+                plugin_name=plugin_name,
+                plugin_type="model",
+                pid=0,  # No local process — connected to external Ollama server
+                process=None,
+                host=ep_host,
+                port=ep_port,
+                log_file=log_file,
+                started_at=time.time(),
+                status=PluginStatus.RUNNING,
+                health_endpoint="/api/tags",
+            )
+
+            # Store the plugin reference for inference calls
+            inst._ollama_plugin = plugin  # type: ignore[attr-defined]
+            self._instances[plugin_name] = inst
+
+            print(
+                f"[LIFECYCLE] Ollama plugin {plugin_name} ready at "
+                f"{ep_host}:{ep_port}",
+                flush=True,
+            )
+
+            # Register with model router for unified routing
+            self._register_with_model_router(inst)
+
+            return inst
+
+        except Exception as e:
+            print(f"[LIFECYCLE] Failed to start Ollama plugin {plugin_name}: {e}", flush=True)
+            raise RuntimeError(f"Failed to start Ollama plugin: {e}")
 
     def _register_with_model_router(self, inst: PluginInstance):
         """Register a running instance with the model router."""

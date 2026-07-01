@@ -206,7 +206,14 @@ class PluginManifest:
             schema = json.load(f)
         raw = self._to_raw()
         try:
-            jsonschema.validate(instance=raw, schema=schema)
+            # Use a RefResolver with file:// base so relative $ref (e.g. "plugin-manifest.json")
+            # resolves against the schema directory on disk.
+            try:
+                resolver = jsonschema.RefResolver(base_uri=f"file://{root}/", referrer=schema)
+                jsonschema.validate(instance=raw, schema=schema, resolver=resolver)
+            except Exception:
+                # Fallback: attempt plain validate (older jsonschema versions)
+                jsonschema.validate(instance=raw, schema=schema)
         except jsonschema.ValidationError as e:
             raise ValueError(f"manifest {self.name!r} failed schema: {e.message}") from e
 
