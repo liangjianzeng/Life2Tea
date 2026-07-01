@@ -29,6 +29,7 @@
     <!-- Main chat area -->
     <div class="chat-main">
       <div class="chat-header">
+        <button class="btn-sidebar-open" @click="toggleSidebar" title="Toggle conversations">☰</button>
         <h2>{{ t("chat.title") }}</h2>
         <span class="model-badge" v-if="selectedModel">{{ selectedModel }}</span>
       </div>
@@ -105,6 +106,12 @@ async function loadConversations() {
       conversations.value = data.conversations || [];
     }
   } catch (e) { /* silent */ }
+}
+
+function toggleSidebar() {
+  sidebarCollapsed.value = !sidebarCollapsed.value;
+  // Toggle backdrop class for mobile
+  document.querySelector('.chat-view')?.classList.toggle('sidebar-open', !sidebarCollapsed.value);
 }
 
 async function switchConversation(conv: any) {
@@ -541,6 +548,26 @@ onMounted(async () => {
 
 .chat-header h2 { margin: 0; font-size: 1.2em; }
 
+/* Sidebar toggle button in chat header (mobile only) */
+.btn-sidebar-open {
+  display: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  border: 1px solid #2d2d4a;
+  background: transparent;
+  color: #e0e0ff;
+  font-size: 1.2em;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.btn-sidebar-open:hover {
+  background: #2d2d4a;
+}
+
 .model-badge {
   font-size: 0.8em;
   background: #534ab7;
@@ -640,4 +667,159 @@ onMounted(async () => {
 }
 
 .chat-input button:hover:not(:disabled) { background: #6b5cc4; }
+
+/* ===== Mobile Responsive (≤768px) ===== */
+@media (max-width: 768px) {
+  .chat-view {
+    position: relative;
+  }
+
+  /* Sidebar becomes overlay on mobile, below the header */
+  .sidebar {
+    position: fixed;
+    top: 52px;
+    left: 0;
+    bottom: 0;
+    width: 280px;
+    min-width: 280px;
+    z-index: 1000;
+    transform: translateX(-100%);
+    transition: transform 0.3s ease;
+    box-shadow: none;
+  }
+
+  .sidebar:not(.collapsed) {
+    transform: translateX(0);
+  }
+
+  /* Backdrop overlay - below header */
+  .chat-view::before {
+    content: '';
+    position: fixed;
+    top: 52px;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+    z-index: 998;
+  }
+
+  .chat-view.sidebar-open::before {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* Mobile sidebar header */
+  .sidebar-header {
+    padding: 12px 16px;
+  }
+
+  .sidebar-header h3 {
+    font-size: 0.95em;
+  }
+
+  /* Conversation list items smaller on mobile */
+  .conv-item {
+    padding: 8px 12px;
+  }
+
+  .conv-title {
+    font-size: 0.85em;
+  }
+
+  .btn-delete-conv {
+    width: 28px;
+    height: 28px;
+    opacity: 1; /* Always visible on mobile */
+  }
+
+  /* Chat header adapts to full width */
+  .chat-header {
+    padding: 12px 16px;
+    gap: 8px;
+    height: 52px;
+    flex-shrink: 0;
+  }
+
+  .chat-header h2 {
+    font-size: 1em;
+  }
+
+  /* Messages area uses full width on mobile */
+  .messages {
+    padding: 12px 16px;
+    gap: 8px;
+  }
+
+  .message {
+    max-width: 90%;
+    padding: 8px 12px;
+  }
+
+  /* Input area adapts to mobile */
+  .chat-input {
+    padding: 12px 16px;
+    gap: 6px;
+  }
+
+  .chat-input textarea {
+    font-size: 0.9em;
+    min-height: 36px;
+    padding: 8px 12px;
+  }
+
+  .chat-input button {
+    padding: 8px 14px;
+    font-size: 0.9em;
+  }
+
+  /* Sidebar toggle moves to chat header on mobile */
+  .sidebar-toggle {
+    display: none;
+  }
+
+  /* Mobile-only sidebar trigger in chat header */
+  .chat-header .btn-sidebar-open {
+    display: flex !important;
+  }
+}
+
+/* Extra small screens (≤480px) */
+@media (max-width: 480px) {
+  .sidebar {
+    width: 100%;
+    min-width: 100%;
+  }
+
+  .chat-header h2 {
+    font-size: 0.95em;
+  }
+
+  .messages {
+    padding: 8px 12px;
+  }
+
+  .message {
+    max-width: 95%;
+    padding: 6px 10px;
+    font-size: 0.9em;
+  }
+
+  .chat-input {
+    padding: 8px 12px;
+  }
+
+  .chat-input textarea {
+    min-height: 32px;
+    padding: 6px 10px;
+  }
+
+  .model-badge {
+    font-size: 0.7em;
+    padding: 1px 6px;
+  }
+}
 </style>
