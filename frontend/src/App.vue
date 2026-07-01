@@ -74,6 +74,13 @@ function toggle() {
 </script>
 
 <style>
+/* Global background fix */
+body, html, #app {
+  margin: 0;
+  padding: 0;
+  background: #0f0f1a;
+  min-height: 100vh;
+}
 .app-header {
   display: flex;
   justify-content: space-between;
@@ -145,7 +152,7 @@ function toggle() {
   background: #3d3d5a;
 }
 .app-main {
-  height: calc(100vh - 56px);
+  min-height: calc(100vh - 56px);
   background: #0f0f1a;
   color: #e0e0ff;
 }
@@ -194,7 +201,7 @@ function toggle() {
   }
 
   .app-main {
-    height: calc(100vh - 50px);
+    min-height: calc(100vh - 50px);
   }
 
   .mobile-menu {
@@ -242,7 +249,7 @@ function toggle() {
   }
 
   .app-main {
-    height: calc(100vh - 48px);
+    min-height: calc(100vh - 48px);
   }
 }
 </style>

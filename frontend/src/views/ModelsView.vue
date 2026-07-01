@@ -8,7 +8,6 @@
         </button>
       </div>
     </div>
-
     <div v-if="models.length" class="models-list">
       <div v-for="m in models" :key="m.family" class="model-card">
         <div class="model-info">
@@ -59,12 +58,10 @@
         </div>
       </div>
     </div>
-
     <div v-else class="empty-state">
       <p>{{ t("models.none") }}</p>
       <p class="hint">{{ t("models.hint", { path: "`models_dir`" }) }}</p>
     </div>
-
     <!-- Model Config Modal -->
     <div v-if="showConfigModal" class="modal-overlay" @click.self="closeConfig">
       <div class="modal-content config-modal">
@@ -81,7 +78,10 @@
             </div>
             <div class="form-group">
               <label>{{ t("settings.labels.ctxSize") }}</label>
-              <input v-model.number="modelConfig.ctx_size" type="number" min="512" max="131072" />
+              <div class="ctx-input-wrap">
+                <input v-model.number="ctx_size_k" type="number" min="1" max="128" step="1" />
+                <span class="ctx-unit">K</span>
+              </div>
             </div>
             <div class="form-group">
               <label>{{ t("settings.labels.threads") }}</label>
@@ -92,7 +92,6 @@
               <input v-model.number="modelConfig.batch_size" type="number" min="1" max="4096" />
             </div>
           </div>
-
           <div class="config-section">
             <h4>{{ t("models.configAdvanced") }}</h4>
             <div class="form-group checkbox-group">
@@ -120,7 +119,6 @@
               </label>
             </div>
           </div>
-
           <div class="config-section">
             <h4>{{ t("models.configMTP") }}</h4>
             <div class="mtp-description">
@@ -160,7 +158,6 @@
               </div>
             </div>
           </div>
-
           <div class="config-section">
             <h4>{{ t("models.configKVCache") }}</h4>
             <div class="form-group">
@@ -182,7 +179,6 @@
               </select>
             </div>
           </div>
-
           <div class="config-section">
             <h4>{{ t("models.configPresets") }}</h4>
             <div class="preset-buttons">
@@ -200,13 +196,10 @@
     </div>
   </div>
 </template>
-
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, computed, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
-
 const { t } = useI18n();
-
 interface Model {
   family: string;
   name: string;
@@ -225,7 +218,6 @@ interface Model {
     status: string;
   };
 }
-
 const models = ref<Model[]>([]);
 const scanning = ref(false);
 const loadingModel = ref<string | null>(null);
@@ -234,6 +226,7 @@ const selectedModel = ref<Model | null>(null);
 const modelConfig = ref<any>({
   gpu_layers: 99,
   ctx_size: 32768,
+  ctx_size_k: 32,  // K 单位显示值
   threads: 0,
   batch_size: 1024,
   flash_attn: false,
@@ -249,7 +242,14 @@ const modelConfig = ref<any>({
   mtp_prob_threshold: 0.5,
   mtp_parallel: 1,
 });
-
+// ctx_size 显示为 K 单位（32K=32768 tokens）
+const ctx_size_k = computed({
+  get: () => Math.round((modelConfig.value.ctx_size || 32768) / 1024),
+  set: (val: number) => {
+    modelConfig.value.ctx_size = val * 1024;
+    modelConfig.value.ctx_size_k = val;
+  },
+});
 async function scan() {
   scanning.value = true;
   try {
@@ -262,7 +262,6 @@ async function scan() {
     scanning.value = false;
   }
 }
-
 async function loadModel(m: Model) {
   loadingModel.value = m.family;
   try {
@@ -285,10 +284,8 @@ async function loadModel(m: Model) {
     loadingModel.value = null;
   }
 }
-
 async function unloadModel(m: Model) {
   if (!confirm(t("models.confirmUnload", { name: m.display }))) return;
-
   loadingModel.value = m.family;
   try {
     const res = await fetch(`/api/models/${m.family}/unload`, {
@@ -307,10 +304,8 @@ async function unloadModel(m: Model) {
     loadingModel.value = null;
   }
 }
-
 async function disableModel(m: Model) {
   if (!confirm(`确定要禁用模型 ${m.display} 吗？禁用后不会被系统自动加载。`)) return;
-
   loadingModel.value = m.family;
   try {
     const res = await fetch(`/api/models/${m.family}/disable`, {
@@ -330,7 +325,6 @@ async function disableModel(m: Model) {
     loadingModel.value = null;
   }
 }
-
 async function enableModel(m: Model) {
   loadingModel.value = m.family;
   try {
@@ -351,7 +345,6 @@ async function enableModel(m: Model) {
     loadingModel.value = null;
   }
 }
-
 async function refresh() {
   try {
     const res = await fetch("/api/models", { credentials: "include" });
@@ -363,7 +356,6 @@ async function refresh() {
     console.error("Failed to refresh models:", e);
   }
 }
-
 function showConfig(m: Model) {
   selectedModel.value = m;
   showConfigModal.value = true;
@@ -386,12 +378,10 @@ function showConfig(m: Model) {
       // Use defaults
     });
 }
-
 function closeConfig() {
   showConfigModal.value = false;
   selectedModel.value = null;
 }
-
 async function saveModelConfig() {
   if (!selectedModel.value) return;
   
@@ -413,13 +403,13 @@ async function saveModelConfig() {
     alert(t("models.configError"));
   }
 }
-
 function applyPreset(preset: string) {
   switch (preset) {
     case 'lightweight':
       modelConfig.value = {
         gpu_layers: 20,
         ctx_size: 4096,
+        ctx_size_k: 4,
         threads: 4,
         batch_size: 512,
         flash_attn: false,
@@ -440,6 +430,7 @@ function applyPreset(preset: string) {
       modelConfig.value = {
         gpu_layers: 40,
         ctx_size: 8192,
+        ctx_size_k: 8,
         threads: 8,
         batch_size: 1024,
         flash_attn: true,
@@ -460,6 +451,7 @@ function applyPreset(preset: string) {
       modelConfig.value = {
         gpu_layers: 99,
         ctx_size: 16384,
+        ctx_size_k: 16,
         threads: 16,
         batch_size: 2048,
         flash_attn: true,
@@ -478,11 +470,22 @@ function applyPreset(preset: string) {
       break;
   }
 }
-
 onMounted(scan);
 </script>
-
 <style scoped>
+.ctx-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ctx-input-wrap input {
+  width: 80px;
+}
+.ctx-unit {
+  color: #888;
+  font-size: 14px;
+  font-weight: 500;
+}
 .models-view {
   max-width: 800px;
   margin: 0 auto;
@@ -491,7 +494,6 @@ onMounted(scan);
   display: flex;
   flex-direction: column;
 }
-
 .models-header {
   display: flex;
   justify-content: space-between;
@@ -499,17 +501,14 @@ onMounted(scan);
   padding: 16px 0;
   border-bottom: 1px solid #2d2d4a;
 }
-
 .models-header h2 {
   margin: 0;
   font-size: 1.2em;
 }
-
 .header-actions {
   display: flex;
   gap: 8px;
 }
-
 .btn-scan {
   padding: 6px 16px;
   background: #534ab7;
@@ -519,12 +518,10 @@ onMounted(scan);
   cursor: pointer;
   font-size: 0.9em;
 }
-
 .btn-scan:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
-
 .models-list {
   flex: 1;
   overflow-y: auto;
@@ -533,7 +530,6 @@ onMounted(scan);
   flex-direction: column;
   gap: 8px;
 }
-
 .model-card {
   display: flex;
   justify-content: space-between;
@@ -543,40 +539,33 @@ onMounted(scan);
   border-radius: 8px;
   border: 1px solid #2d2d4a;
 }
-
 .model-info {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
-
 .model-name {
   color: #e0e0ff;
   font-size: 1em;
 }
-
 .model-meta {
   font-size: 0.85em;
   opacity: 0.6;
 }
-
 .model-status {
   font-size: 0.8em;
   padding: 2px 8px;
   border-radius: 12px;
   width: fit-content;
 }
-
 .model-status.running {
   background: #1a3a1a;
   color: #4caf50;
 }
-
 .model-status.stopped {
   background: #3a1a1a;
   color: #f44336;
 }
-
 .model-disabled {
   font-size: 0.75em;
   padding: 2px 6px;
@@ -586,12 +575,10 @@ onMounted(scan);
   margin-top: 2px;
   display: inline-block;
 }
-
 .model-actions {
   display: flex;
   gap: 8px;
 }
-
 .btn-load {
   padding: 6px 16px;
   background: #4caf50;
@@ -601,12 +588,10 @@ onMounted(scan);
   cursor: pointer;
   font-size: 0.9em;
 }
-
 .btn-load:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
-
 .btn-unload {
   padding: 6px 16px;
   background: #f44336;
@@ -616,7 +601,6 @@ onMounted(scan);
   cursor: pointer;
   font-size: 0.9em;
 }
-
 .btn-config {
   padding: 6px 12px;
   background: #534ab7;
@@ -626,11 +610,9 @@ onMounted(scan);
   cursor: pointer;
   font-size: 0.9em;
 }
-
 .btn-config:hover {
   background: #6b5cc4;
 }
-
 .btn-disable {
   padding: 6px 12px;
   background: #ff9800;
@@ -640,7 +622,6 @@ onMounted(scan);
   cursor: pointer;
   font-size: 0.85em;
 }
-
 .btn-enable {
   padding: 6px 12px;
   background: #4caf50;
@@ -650,12 +631,10 @@ onMounted(scan);
   cursor: pointer;
   font-size: 0.9em;
 }
-
 .btn-enable:hover,
 .btn-disable:hover {
   opacity: 0.9;
 }
-
 .modal-overlay {
   position: fixed;
   top: 0;
@@ -668,7 +647,6 @@ onMounted(scan);
   justify-content: center;
   z-index: 1000;
 }
-
 .config-modal {
   width: 600px;
   max-width: 90%;
@@ -679,35 +657,29 @@ onMounted(scan);
   border-radius: 12px;
   box-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
 }
-
 .config-section {
   margin-bottom: 20px;
   padding-bottom: 20px;
   border-bottom: 1px solid #2d2d4a;
 }
-
 .config-section:last-child {
   border-bottom: none;
 }
-
 .config-section h4 {
   margin: 0 0 12px 0;
   color: #7c5cff;
   font-size: 1em;
 }
-
 .form-group {
   display: flex;
   align-items: center;
   margin-bottom: 10px;
 }
-
 .form-group label {
   min-width: 140px;
   font-size: 0.85em;
   color: #b0b0d0;
 }
-
 .form-group input[type="number"],
 .form-group select {
   flex: 1;
@@ -719,18 +691,15 @@ onMounted(scan);
   border-radius: 4px;
   font-size: 0.9em;
 }
-
 .form-group input:focus,
 .form-group select:focus {
   outline: none;
   border-color: #534ab7;
 }
-
 .checkbox-group {
   display: flex;
   align-items: center;
 }
-
 .checkbox-group label {
   display: flex;
   align-items: center;
@@ -738,19 +707,16 @@ onMounted(scan);
   cursor: pointer;
   min-width: auto;
 }
-
 .checkbox-group input[type="checkbox"] {
   width: 16px;
   height: 16px;
   cursor: pointer;
 }
-
 .preset-buttons {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
 }
-
 .mtp-description {
   margin-bottom: 15px;
   padding: 10px;
@@ -758,20 +724,17 @@ onMounted(scan);
   border: 1px solid #2d2d4a;
   border-radius: 4px;
 }
-
 .mtp-description p {
   margin: 0;
   font-size: 0.85em;
   color: #a0a0c0;
   line-height: 1.4;
 }
-
 .mtp-params {
   margin-top: 15px;
   padding-top: 15px;
   border-top: 1px dashed #2d2d4a;
 }
-
 .param-hint {
   display: block;
   margin-top: 4px;
@@ -779,7 +742,6 @@ onMounted(scan);
   color: #666;
   font-style: italic;
 }
-
 .btn-preset {
   padding: 6px 12px;
   background: #2d2d4a;
@@ -789,12 +751,10 @@ onMounted(scan);
   cursor: pointer;
   font-size: 0.85em;
 }
-
 .btn-preset:hover {
   background: #3d3d5a;
   color: #9d7fff;
 }
-
 .modal-footer {
   display: flex;
   justify-content: flex-end;
@@ -803,7 +763,6 @@ onMounted(scan);
   border-top: 1px solid #2d2d4a;
   margin-top: 20px;
 }
-
 .btn-cancel {
   padding: 8px 16px;
   background: #2d2d4a;
@@ -813,11 +772,9 @@ onMounted(scan);
   cursor: pointer;
   font-size: 0.9em;
 }
-
 .btn-cancel:hover {
   background: #3d3d5a;
 }
-
 .btn-save {
   padding: 8px 16px;
   background: #534ab7;
@@ -827,16 +784,13 @@ onMounted(scan);
   cursor: pointer;
   font-size: 0.9em;
 }
-
 .btn-save:hover {
   background: #6b5cc4;
 }
-
 .btn-unload:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
-
 .empty-state {
   flex: 1;
   display: flex;
@@ -846,12 +800,10 @@ onMounted(scan);
   opacity: 0.6;
   text-align: center;
 }
-
 .hint {
   font-size: 0.9em;
   max-width: 400px;
 }
-
 code {
   background: #2d2d4a;
   padding: 2px 6px;

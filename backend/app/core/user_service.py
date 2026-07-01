@@ -9,7 +9,9 @@ Handles:
 """
 
 import hashlib
+import os
 import secrets
+from dotenv import load_dotenv
 import time
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass, field
@@ -70,6 +72,55 @@ class UserService:
             return count > 0
         finally:
             conn.close()
+
+    def reset_and_init_from_env(self):
+        """从 .env 文件加载管理员配置并自动初始化"""
+        # 只在没有管理员时才初始化
+        if self.is_initialized():
+            print('[UserService] Admin already exists, skipping initialization')
+            return None
+
+        env_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), '.env')
+        if not os.path.exists(env_file):
+            print('[UserService] .env file not found, skipping initialization')
+            return None
+
+        try:
+            load_dotenv(env_file)
+            admin_email = os.environ.get('ADMIN_EMAIL')
+            admin_password = os.environ.get('ADMIN_PASSWORD')
+
+            if admin_email and admin_password:
+                print(f'[UserService] Creating admin from .env: {admin_email}')
+                return self.create_admin(admin_email, admin_password)
+            else:
+                print('[UserService] ADMIN_EMAIL or ADMIN_PASSWORD not found in .env')
+        except Exception as e:
+            print(f'[UserService] Error loading admin from .env: {e}')
+
+        return None
+
+    def load_admin_from_env(self):
+        """从 .env 文件加载管理员配置并自动初始化"""
+        if self.is_initialized():
+            return None
+
+        env_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), '.env')
+        if not os.path.exists(env_file):
+            return None
+
+        try:
+            load_dotenv(env_file)
+            admin_email = os.environ.get('ADMIN_EMAIL')
+            admin_password = os.environ.get('ADMIN_PASSWORD')
+
+            if admin_email and admin_password:
+                print(f'[UserService] Loading admin from .env: {admin_email}')
+                return self.create_admin(admin_email, admin_password)
+        except Exception as e:
+            print(f'[UserService] Error loading admin from .env: {e}')
+
+        return None
 
     def create_admin(self, email: str, password: str) -> User:
         """Create the first admin user."""
@@ -208,6 +259,13 @@ def init_user_service(db: Database) -> UserService:
     """Initialize the global user service."""
     global _user_service
     _user_service = UserService(db)
+
+    try:
+        _user_service.reset_and_init_from_env()
+        print('[UserService] Auto-initialization check completed')
+    except Exception as e:
+        print(f'[UserService] Auto-initialization failed: {e}')
+
     return _user_service
 
 

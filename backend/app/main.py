@@ -237,6 +237,8 @@ async def lifespan(app: FastAPI):
     from app.routers import config_router, models_router, plugins_router
     from app.routers import chat_router, metrics_router, logs_router, routing_router
     from app.routers import auth_router, stats_router
+    
+    from app.routers.proxy_service import proxy_router
     from app.routers.log_router import router as log_router
     from app.routers.model_router_router import router as model_router_router
 
@@ -251,6 +253,7 @@ async def lifespan(app: FastAPI):
     app.include_router(auth_router, prefix="/api/auth", tags=["Auth"])
     app.include_router(stats_router.router)
     app.include_router(model_router_router, prefix="/api/model-router", tags=["ModelRouter"])
+    app.include_router(proxy_router)
     print("[LIFECYCLE] Routers registered, total routes:", len(app.routes), flush=True)
     # Print all routes that have a path attribute
     for r in app.routes:

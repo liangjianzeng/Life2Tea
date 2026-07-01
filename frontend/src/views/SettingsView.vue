@@ -35,7 +35,10 @@
       </div>
       <div class="form-group">
         <label>{{ t("settings.labels.ctxSize") }}</label>
-        <input v-model.number="config.ctx_size" type="number" min="512" max="131072" />
+        <div class="ctx-input-wrap">
+          <input v-model.number="ctx_size_k" type="number" min="1" max="128" step="1" />
+          <span class="ctx-unit">K</span>
+        </div>
       </div>
       <div class="form-group">
         <label>{{ t("settings.labels.threads") }}</label>
@@ -127,7 +130,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from "vue";
+import { ref, reactive, computed, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
 import PathPickerModal from "../components/PathPickerModal.vue";
 
@@ -135,6 +138,15 @@ const { t } = useI18n();
 
 const config = ref<any>({});
 const saving = ref(false);
+
+// ctx_size 显示为 K 单位（32K=32768 tokens）
+const ctx_size_k = computed({
+  get: () => Math.round((config.value.ctx_size || 32768) / 1024),
+  set: (val: number) => {
+    config.value.ctx_size = val * 1024;
+    config.value.ctx_size_k = val;
+  },
+});
 const message = ref("");
 const messageType = ref<"success" | "error">("success");
 
@@ -206,6 +218,19 @@ onMounted(load);
 </script>
 
 <style scoped>
+.ctx-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ctx-input-wrap input {
+  width: 80px;
+}
+.ctx-unit {
+  color: #888;
+  font-size: 14px;
+  font-weight: 500;
+}
 .settings-view {
   max-width: 800px;
   margin: 0 auto;

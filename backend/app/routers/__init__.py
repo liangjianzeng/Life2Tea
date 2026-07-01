@@ -14,6 +14,7 @@ from .logs_router import router as logs_router
 from .routing_router import router as routing_router
 from .api_keys_router import router as api_keys_router
 from .auth_router import router as auth_router
+from .openai_proxy import router as openai_proxy
 
 __all__ = [
     "config_router",
@@ -24,4 +25,5 @@ __all__ = [
     "logs_router",
     "routing_router",
     "api_keys_router",
+    "openai_proxy",
 ]
