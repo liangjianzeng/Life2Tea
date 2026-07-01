@@ -129,6 +129,12 @@ export default {
 
   chat: {
     title: "Chat",
+    conversations: "Conversations",
+    noConversations: "No conversations yet",
+    newConversation: "New Conversation",
+    untitled: "Untitled",
+    justNow: "just now",
+    confirmDelete: "Delete this conversation? This cannot be undone.",
     placeholder: "Type a message... (Shift+Enter for new line)",
     send: "Send",
     sending: "Sending...",

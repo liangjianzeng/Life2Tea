@@ -364,3 +364,26 @@ async def save_message(body: MessageBody, request: Request):
         return {"message_id": msg_id, "ok": True}
     finally:
         db.close()
+
+
+@router.delete("/conversation/{conversation_id}", summary="Delete a conversation and its messages")
+async def delete_conversation(conversation_id: str, request: Request):
+    from ..core.database import _db
+    db = _db.get_connection()
+    try:
+        # Delete all messages in the conversation first
+        db.execute(
+            "DELETE FROM messages WHERE conversation_id = ?",
+            (conversation_id,)
+        )
+        # Delete the conversation itself
+        cursor = db.execute(
+            "DELETE FROM conversations WHERE id = ?",
+            (conversation_id,)
+        )
+        db.commit()
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        return {"ok": True}
+    finally:
+        db.close()

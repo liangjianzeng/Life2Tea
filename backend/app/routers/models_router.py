@@ -311,22 +311,24 @@ async def load_model(
     # Build args manually since ModelRegistry is empty
     model_path = info.model_path
     args = [backend.server_path, "--model", model_path, "--port", str(port)]
-    # Integer-only params that must not be floats
-    _INT_PARAMS = {"repeat_penalty"}
+    # Only pass core params that are always valid; skip optional/spec-decoding params
+    _CORE_PARAMS = {"ngl", "ctx", "batch", "ubatch", "threads", "temp", "top_k", "top_p"}
+    
+    mirostat_mode = params.get("mirostat", 0)
     
     for k, v in params.items():
-        if v is None or v == "":
+        if v is None or v == "" or k not in _CORE_PARAMS:
             continue
+        
         cli_key = _CLI_ARG_MAP.get(k, f"--{k.replace('_', '-')}")
-        # Boolean flags: only add the flag itself when True (no value needed)
-        if isinstance(v, bool):
-            if not v:
-                continue
-            args.append(cli_key)  # e.g. --flash-attn (no value)
-            continue
+        
         # Convert integer-only params to int
-        if k in _INT_PARAMS and isinstance(v, float):
-            v = int(v)
+        if isinstance(v, float):
+            try:
+                v = int(v)
+            except (ValueError, TypeError):
+                pass
+        
         args.extend([cli_key, str(v)])
 
     print(f"[load_model] Generated llama-server command for {family}: {' '.join(args)}", flush=True)

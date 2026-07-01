@@ -128,6 +128,12 @@ export default {
 
   chat: {
     title: "聊天",
+    conversations: "会话列表",
+    noConversations: "暂无会话",
+    newConversation: "新建会话",
+    untitled: "未命名",
+    justNow: "刚刚",
+    confirmDelete: "确定要删除此会话吗？此操作不可撤销。",
     placeholder: "输入消息...（Shift+Enter 换行）",
     send: "发送",
     sending: "发送中...",
