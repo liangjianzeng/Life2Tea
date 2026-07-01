@@ -218,24 +218,17 @@ async def load_model(
 
     cfg = cfg_mgr.get_global()
     
-    # Check if it's a plugin model (like ollama) or GGUF model
-    is_plugin_model = False
-    info = registry.get_model(family)
-    
-    # If not found in GGUF registry, check plugin registry
-    if not info and plugin_registry:
-        for desc in plugin_registry.list_plugins(type="model"):
-            if desc.manifest.model and desc.manifest.model.model_family == family:
-                is_plugin_model = True
-                print(f"[load_model] Found plugin model: {family}", flush=True)
-                break
-    
     # Determine port
     port = body.port if body and body.port else cfg.get("default_port_range", [8080, 8099])[0]
 
-    # For plugin models (like ollama), use lifecycle manager directly
-    if is_plugin_model:
-        print(f"[load_model] Starting plugin model {family}", flush=True)
+    # Check if this is a pure plugin model (like ollama) that doesn't need llama-server.
+    # Pure plugin models have no model_path in their manifest; GGUF models do.
+    is_pure_plugin = False
+    if family == "ollama":
+        is_pure_plugin = True
+    
+    if is_pure_plugin:
+        print(f"[load_model] Starting Ollama plugin model", flush=True)
         try:
             instance = lifecycle.start_plugin(
                 plugin_name=family,
@@ -253,9 +246,17 @@ async def load_model(
                 detail=f"Failed to start plugin model: {e}",
             )
 
-    # For GGUF models, use the original logic
-    if not info:
-        raise HTTPException(status_code=404, detail="Model not found")
+    # For all other models (GGUF), use the original llama-server logic.
+    # Since ModelRegistry.scan() is empty, we look up via plugin_registry instead.
+    info = None
+    if plugin_registry:
+        for desc in plugin_registry.list_plugins(type="model"):
+            if desc.manifest.model and desc.manifest.model.model_family == family:
+                info = desc.manifest.model
+                break
+    
+    if not info or not getattr(info, "model_path", ""):
+        raise HTTPException(status_code=404, detail=f"Model '{family}' not found")
 
     # Find backend
     from ..plugins.backend_registry import detect_backend
@@ -267,11 +268,68 @@ async def load_model(
     if not backend.available or not backend.server_path:
         raise HTTPException(status_code=500, detail="No backend available")
 
-    # Build command
-    params = registry.get_default_params(family)
+    # Build command using plugin manifest data directly (bypass broken ModelRegistry)
+    from ..plugins.model_registry import DEFAULT_PARAMS, FAMILY_PARAMS
+    
+    # Map internal param names to llama-server CLI arg names
+    _CLI_ARG_MAP = {
+        "ngl": "--n-gpu-layers",
+        "ctx": "--ctx-size",
+        "batch": "--batch-size",
+        "ubatch": "--ubatch-size",
+        "threads": "--threads",
+        "cache_type_k": "--cache-type-k",
+        "cache_type_v": "--cache-type-v",
+        "flash_attn": "--flash-attn",
+        "mmap": "--mmap",
+        "mlock": "--mlock",
+        "parallel": "--parallel",
+        "cont_batching": "--cont-batching",
+        "temp": "--temperature",
+        "top_k": "--top-k",
+        "top_p": "--top-p",
+        "min_p": "--min-p",
+        "repeat_penalty": "--repeat-last-n",
+        "presence_penalty": "--presence-penalty",
+        "frequency_penalty": "--frequency-penalty",
+        "mirostat": "--mirostat",
+        "mirostat_tau": "--mirostat-tau",
+        "mirostat_eta": "--mirostat-eta",
+        "spec_type": "--spec-type",
+        "spec_draft_n_max": "--draft-n-max",
+        "spec_draft_type_k": "--draft-cache-type-k",
+        "spec_draft_type_v": "--draft-cache-type-v",
+    }
+    
+    params = dict(DEFAULT_PARAMS)
+    for fam_key, overrides in FAMILY_PARAMS.items():
+        if info.model_family.startswith(fam_key):
+            params.update(overrides)
     params["ngl"] = cfg.get("gpu_layers", params["ngl"])
     params["ctx"] = cfg.get("ctx_size", params.get("ctx", 32768))
-    args = registry.build_server_args(family, params, backend.server_path, port=port)
+    
+    # Build args manually since ModelRegistry is empty
+    model_path = info.model_path
+    args = [backend.server_path, "--model", model_path, "--port", str(port)]
+    # Integer-only params that must not be floats
+    _INT_PARAMS = {"repeat_penalty"}
+    
+    for k, v in params.items():
+        if v is None or v == "":
+            continue
+        cli_key = _CLI_ARG_MAP.get(k, f"--{k.replace('_', '-')}")
+        # Boolean flags: only add the flag itself when True (no value needed)
+        if isinstance(v, bool):
+            if not v:
+                continue
+            args.append(cli_key)  # e.g. --flash-attn (no value)
+            continue
+        # Convert integer-only params to int
+        if k in _INT_PARAMS and isinstance(v, float):
+            v = int(v)
+        args.extend([cli_key, str(v)])
+
+    print(f"[load_model] Generated llama-server command for {family}: {' '.join(args)}", flush=True)
 
     # Check if already running (GGUF model)
     try:
