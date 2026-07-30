@@ -69,17 +69,31 @@ function initChart() {
   });
 
   // GPU if available
-  if (hasGpu) {
-    const gpuPercents = props.data.map((d: any) => d.gpu ? d.gpu.utilization : null);
+  const hasGpuData = props.data.some((d: any) => d.gpu?.utilization != null && d.gpu?.utilization !== undefined);
+  if (hasGpuData) {
     series.push({
-      name: "GPU",
+      name: "GPU Util",
       type: "line",
-      data: gpuPercents,
+      data: props.data.map((d: any) => d.gpu ? d.gpu.utilization : null),
       smooth: true,
       symbol: "none",
       lineStyle: { width: 2 },
       itemStyle: { color: "#fbbf24" },
     });
+
+    // GPU Temperature series (if available in data)
+    const hasTempData = props.data.some((d: any) => d.gpu?.temperature_c != null && d.gpu?.temperature_c !== undefined);
+    if (hasTempData) {
+      series.push({
+        name: "GPU Temp",
+        type: "line",
+        data: props.data.map((d: any) => d.gpu ? d.gpu.temperature_c : null),
+        smooth: true,
+        symbol: "none",
+        lineStyle: { width: 2 },
+        itemStyle: { color: "#f87171" },
+      });
+    }
   }
 
   const option: echarts.EChartsOption = {
@@ -180,17 +194,31 @@ function updateChart() {
   });
   
   // GPU if available
-  if (hasGpu) {
-    const gpuPercents = props.data.map((d: any) => d.gpu ? d.gpu.utilization : null);
+  const hasGpuData = props.data.some((d: any) => d.gpu?.utilization != null && d.gpu?.utilization !== undefined);
+  if (hasGpuData) {
     series.push({
-      name: "GPU",
+      name: "GPU Util",
       type: "line",
-      data: gpuPercents,
+      data: props.data.map((d: any) => d.gpu ? d.gpu.utilization : null),
       smooth: true,
       symbol: "none",
       lineStyle: { width: 2 },
       itemStyle: { color: "#fbbf24" },
     });
+
+    // GPU Temperature series (if available in data)
+    const hasTempData = props.data.some((d: any) => d.gpu?.temperature_c != null && d.gpu?.temperature_c !== undefined);
+    if (hasTempData) {
+      series.push({
+        name: "GPU Temp",
+        type: "line",
+        data: props.data.map((d: any) => d.gpu ? d.gpu.temperature_c : null),
+        smooth: true,
+        symbol: "none",
+        lineStyle: { width: 2 },
+        itemStyle: { color: "#f87171" },
+      });
+    }
   }
   
   const option: echarts.EChartsOption = {

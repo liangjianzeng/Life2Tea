@@ -72,7 +72,7 @@ class StatsService:
         try:
             result = subprocess.run(
                 ['nvidia-smi',
-                 '--query-gpu=utilization.gpu,memory.used,memory.total',
+                 '--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu',
                  '--format=csv,nounits,noheader'],
                 capture_output=True, text=True, timeout=5
             )
@@ -85,10 +85,17 @@ class StatsService:
                     except (ValueError, TypeError):
                         return None
 
+                def safe_int(val):
+                    try:
+                        return int(val)
+                    except (ValueError, TypeError):
+                        return None
+
                 metrics["gpu"] = {
                     "utilization": safe_float(parts[0]),
                     "memory_used": safe_float(parts[1]),
                     "memory_total": safe_float(parts[2]),
+                    "temperature_c": safe_int(parts[3]),
                 }
         except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
             metrics["gpu"] = None
@@ -112,8 +119,8 @@ class StatsService:
                  disk_total, disk_used, disk_percent,
                  network_bytes_sent, network_bytes_recv,
                  disk_io_read_bytes, disk_io_write_bytes, disk_io_read_rate, disk_io_write_rate,
-                 gpu_utilization, gpu_memory_used, gpu_memory_total)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 gpu_utilization, gpu_memory_used, gpu_memory_total, gpu_temperature)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """, (
                 m["timestamp"],
                 m["cpu"],
@@ -132,6 +139,7 @@ class StatsService:
                 m["gpu"]["utilization"] if m["gpu"] else None,
                 m["gpu"]["memory_used"] if m["gpu"] else None,
                 m["gpu"]["memory_total"] if m["gpu"] else None,
+                m["gpu"]["temperature_c"] if m["gpu"] else None,
             ))
             conn.commit()
         finally:
@@ -200,7 +208,7 @@ class StatsService:
             if has_disk_io:
                 cur = conn.execute(
                     """SELECT timestamp, cpu_usage, memory_used, memory_total,
-                              gpu_utilization, gpu_memory_used, gpu_memory_total,
+                              gpu_utilization, gpu_memory_used, gpu_memory_total, gpu_temperature,
                               disk_io_read_rate, disk_io_write_rate
                        FROM system_metrics
                        WHERE timestamp >= ? AND timestamp <= ?
@@ -216,6 +224,7 @@ class StatsService:
                             "utilization": r[4],
                             "memory_used": r[5],
                             "memory_total": r[6],
+                            "temperature_c": r[7],
                         }
                     result.append({
                         "timestamp": r[0],
@@ -223,14 +232,14 @@ class StatsService:
                         "memory": {"used": r[2], "total": r[3]},
                         "gpu": gpu,
                         "disk_io": {
-                            "read_rate": r[7] or 0,
-                            "write_rate": r[8] or 0,
+                            "read_rate": r[8] or 0,
+                            "write_rate": r[9] or 0,
                         },
                     })
             else:
                 cur = conn.execute(
                     """SELECT timestamp, cpu_usage, memory_used, memory_total,
-                              gpu_utilization, gpu_memory_used, gpu_memory_total
+                              gpu_utilization, gpu_memory_used, gpu_memory_total, gpu_temperature
                        FROM system_metrics
                        WHERE timestamp >= ? AND timestamp <= ?
                        ORDER BY timestamp""",
@@ -245,6 +254,7 @@ class StatsService:
                             "utilization": r[4],
                             "memory_used": r[5],
                             "memory_total": r[6],
+                            "temperature_c": r[7],
                         }
                     result.append({
                         "timestamp": r[0],
@@ -607,6 +617,7 @@ class StatsService:
                     gpu_utilization REAL,
                     gpu_memory_used REAL,
                     gpu_memory_total REAL,
+                    gpu_temperature REAL DEFAULT NULL,
                     disk_io_read_bytes INTEGER DEFAULT 0,
                     disk_io_write_bytes INTEGER DEFAULT 0,
                     disk_io_read_rate REAL DEFAULT 0,

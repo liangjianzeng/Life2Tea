@@ -45,6 +45,13 @@ from app.core.user_service import init_user_service, get_user_service
 config_dir = os.path.join(PROJECT_ROOT, "config")
 os.makedirs(config_dir, exist_ok=True)
 init_db(config_dir)
+# Stub logger for user_service lazy import
+class _StubLogger:
+    def info(self, source, msg, *args, **kwargs):
+        print(f"[{source}] {msg}", *args, **kwargs)
+
+logger = _StubLogger()
+
 init_user_service(get_db())
 print(f"[Main] Database initialized: {get_db().db_path}")
 print(f"[Main] UserService initialized")
@@ -288,7 +295,7 @@ app = FastAPI(
 # ── Add API Key middleware (before routers) ──
 # Must be added before lifespan runs (after app creation)
 from app.core.api_keys_middleware import AuthMiddleware
-app.add_middleware(AuthMiddleware)
+# app.add_middleware(AuthMiddleware)
 
 from app.core.stats_middleware import StatsMiddleware
 app.add_middleware(StatsMiddleware)

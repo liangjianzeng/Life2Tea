@@ -98,6 +98,7 @@ export default {
     memoryUsage: "Memory Usage",
     gpuUsage: "GPU Usage",
     gpuMemory: "GPU Memory",
+    gpuTemperature: "GPU Temperature",
     gpuHistory: "GPU History",
     totalRequests: "Total Requests",
     avgLatency: "avg latency",

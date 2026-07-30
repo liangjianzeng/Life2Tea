@@ -70,7 +70,7 @@
         </div>
       </div>
 
-      <div class="card" v-if="metrics.gpu && metrics.gpu.utilization != null">
+      <div class="card gpu-card" v-if="metrics.gpu && metrics.gpu.utilization != null">
         <div class="card-icon gpu-icon">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <rect x="2" y="6" width="20" height="12" rx="2" />
@@ -81,6 +81,9 @@
         <div class="card-info">
           <div class="card-value">{{ metrics.gpu.utilization }}%</div>
           <div class="card-label">{{ t("dashboard.gpuUsage") }}</div>
+          <div class="card-sub gpu-temp" v-if="metrics.gpu.temperature_c != null">
+            &#x00B0;{{ metrics.gpu.temperature_c }}C
+          </div>
         </div>
         <div class="card-progress">
           <div class="progress-bar" :style="{ width: gpuMemoryPercent + '%' }"
@@ -422,6 +425,17 @@ onUnmounted(() => {
 .refresh-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* GPU merged card */
+.gpu-card {
+  grid-column: span 1;
+}
+
+.gpu-temp {
+  color: #f87171 !important;
+  font-weight: 600;
+  margin-top: 2px;
 }
 
 /* Overview cards */
