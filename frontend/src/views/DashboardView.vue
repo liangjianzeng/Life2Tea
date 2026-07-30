@@ -61,8 +61,9 @@
           </svg>
         </div>
         <div class="card-info">
-          <div class="card-value">{{ formatMemory(metrics.memory.used, metrics.memory.total) }}</div>
-          <div class="card-label">{{ t("dashboard.memoryUsage") }}</div>
+          <div class="card-value">{{ formatMemoryUsed(metrics.memory.used) }}</div>
+          <div class="card-sub">{{ memoryPercent }}% · {{ t("dashboard.memoryUsage") }}</div>
+          <div class="card-sub mem-total">{{ formatMemoryTotal(metrics.memory.total) }}</div>
         </div>
         <div class="card-progress">
           <div class="progress-bar" :style="{ width: memoryPercent + '%' }"
@@ -85,11 +86,11 @@
             &#x00B0;{{ metrics.gpu.temperature_c }}C
           </div>
         </div>
-        <div class="card-progress">
+        <div class="card-progress" v-if="metrics.gpu && metrics.gpu.memory_used != null">
           <div class="progress-bar" :style="{ width: gpuMemoryPercent + '%' }"
                :class="gpuMemoryPercent > 80 ? 'bar-warning' : gpuMemoryPercent > 60 ? 'bar-ok' : 'bar-good'"></div>
         </div>
-        <div class="card-sub">
+        <div class="card-sub" v-if="metrics.gpu && metrics.gpu.memory_used != null">
           {{ formatGpuMemory(metrics.gpu.memory_used, metrics.gpu.memory_total) }} {{ t("dashboard.gpuMemory") }}
         </div>
       </div>
@@ -115,10 +116,10 @@
           </svg>
         </div>
         <div class="card-info">
-          <div class="card-value">{{ formatNetwork(metrics.network.bytes_sent) }}</div>
+          <div class="card-value">{{ formatDiskIO(metrics.network.rate_sent) }}</div>
           <div class="card-label">{{ t("dashboard.netOutbound") }}</div>
         </div>
-        <div class="card-sub">{{ formatNetwork(metrics.network.bytes_recv) }} {{ t("dashboard.netInbound") }}</div>
+        <div class="card-sub">{{ formatDiskIO(metrics.network.rate_recv) }} {{ t("dashboard.netInbound") }}</div>
       </div>
 
       <!-- Disk IO Card -->
@@ -296,6 +297,16 @@ function formatGpuMemory(used: number, total: number): string {
   return `${(used / 1024).toFixed(1)} / ${(total / 1024).toFixed(1)} GB`;
 }
 
+function formatMemoryUsed(used: number): string {
+  if (!used) return "0 GB";
+  return `${(used / 1024 / 1024 / 1024).toFixed(1)} GB`;
+}
+
+function formatMemoryTotal(total: number): string {
+  if (!total) return "";
+  return `${(total / 1024 / 1024 / 1024).toFixed(1)} GB`;
+}
+
 function formatNetwork(bytes: number): string {
   if (!bytes) return "0 B";
   if (bytes > 1024 * 1024 * 1024) return (bytes / 1024 / 1024 / 1024).toFixed(1) + " GB";
@@ -438,6 +449,17 @@ onUnmounted(() => {
   margin-top: 2px;
 }
 
+/* GPU merged card */
+.gpu-card {
+  grid-column: span 1;
+}
+
+.gpu-temp {
+  color: #f87171 !important;
+  font-weight: 600;
+  margin-top: 2px;
+}
+
 /* Overview cards */
 .overview-cards {
   display: grid;
@@ -473,6 +495,7 @@ onUnmounted(() => {
 
 .cpu-icon { background: rgba(99, 102, 241, 0.15); color: #818cf8; }
 .mem-icon { background: rgba(16, 185, 129, 0.15); color: #34d399; }
+.mem-total { color: #666 !important; font-size: 0.7em !important; }
 .gpu-icon { background: rgba(245, 158, 11, 0.15); color: #fbbf24; }
 .req-icon { background: rgba(239, 68, 68, 0.15); color: #f87171; }
 .net-icon { background: rgba(59, 130, 246, 0.15); color: #60a5fa; }

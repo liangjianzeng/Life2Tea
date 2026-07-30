@@ -105,6 +105,7 @@ export default {
     netOutbound: "Network Sent",
     netInbound: "Network Recv",
     diskIO: "Disk Read",
+    perSecond: "/s",
     diskWrite: "Disk Write",
     resourceHistory: "Resource History",
     lastHour: "Last 1h",

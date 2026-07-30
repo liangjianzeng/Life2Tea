@@ -26,6 +26,12 @@ class StatsService:
             "read_bytes": 0,
             "write_bytes": 0,
         }
+        # Initialize network baseline for rate calculation
+        self._last_net_io = {
+            "time": datetime.now(),
+            "bytes_sent": 0,
+            "bytes_recv": 0,
+        }
 
     def collect_system_metrics(self) -> Dict[str, Any]:
         """Collect current system metrics"""
@@ -47,6 +53,17 @@ class StatsService:
                     disk_io_values["write_rate"] = (disk_io.write_bytes - self._last_disk_io["write_bytes"]) / elapsed
         self._last_disk_io = {"time": now, "read_bytes": disk_io_values["read_bytes"], "write_bytes": disk_io_values["write_bytes"]}
 
+        # Calculate network throughput rates
+        now_net = datetime.now()
+        net_rate_sent = 0.0
+        net_rate_recv = 0.0
+        if self._last_net_io:
+            elapsed_net = (now_net - self._last_net_io["time"]).total_seconds()
+            if elapsed_net > 0:
+                net_rate_sent = (net.bytes_sent - self._last_net_io["bytes_sent"]) / elapsed_net
+                net_rate_recv = (net.bytes_recv - self._last_net_io["bytes_recv"]) / elapsed_net
+        self._last_net_io = {"time": now_net, "bytes_sent": net.bytes_sent, "bytes_recv": net.bytes_recv}
+
         metrics = {
             "cpu": psutil.cpu_percent(interval=0.1),
             "memory": {
@@ -63,6 +80,8 @@ class StatsService:
             "network": {
                 "bytes_sent": net.bytes_sent,
                 "bytes_recv": net.bytes_recv,
+                "rate_sent": net_rate_sent,
+                "rate_recv": net_rate_recv,
             },
             "timestamp": now.isoformat(),
             "gpu": None,

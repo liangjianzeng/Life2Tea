@@ -104,6 +104,7 @@ export default {
     netOutbound: "网络发送",
     netInbound: "网络接收",
     diskIO: "磁盘读取",
+    perSecond: "/s",
     diskWrite: "磁盘写入",
     resourceHistory: "资源使用历史",
     lastHour: "最近1小时",
