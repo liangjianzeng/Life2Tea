@@ -65,8 +65,15 @@ It enables intelligent plugin-based collaboration between language models and mu
   - 磁盘使用率
 - **模型状态监控**:
   - 运行状态
-  - 内存占用
+  - 内存占用（进程 RSS / 系统内存）
   - 请求处理
+  - **模型运行指标卡片 (Token 实时统计)** 🆕
+    - 一行卡片，按端口展示每个 `llama-server` 实例
+    - **tok/s**：当前窗口速率 + **真实峰值**（探针每请求 `predicted_per_second`，滚动 60s 最大值，非窗口均值）
+    - **MTP 接受率**：多令牌预测接受率（drafted/accepted）
+    - **累计入 / 累计出**：累计 prompt token 与 generated token（取自 `prompt_tokens_total` / `predicted_tokens_total`）
+    - **预填充速率**（prompt tok/s）当前值与峰值
+    - 轮询 10s 刷新；峰值存于文件级 `model-metrics` 峰值存储，跨服务 reload / 多 worker 一致
 - **性能图表**:
   - 请求趋势
   - Token 消耗
@@ -85,8 +92,8 @@ It enables intelligent plugin-based collaboration between language models and mu
 
 #### 9. **统计功能** 🆕
 - **Token 使用统计**:
-  - 输入/输出 Token 计数
-  - 峰值速率
+  - 输入/输出 Token 计数（累计入 / 累计出，分别取自 prompt / predicted 计数器）
+  - 峰值速率（**真实峰值**：取自每请求 timings，而非窗口平均值）
   - 模型使用排行
 - **资源使用统计**:
   - CPU/内存/磁盘历史趋势
@@ -268,6 +275,7 @@ A plugin is a directory with a `manifest.json`:
 | `GET /api/stats/resources` | GET | Get resource usage statistics |
 | `GET /api/stats/performance` | GET | Get performance statistics |
 | `GET /api/stats/api-keys` | GET | Get API key usage statistics |
+| `GET /api/stats/model-metrics` | GET | 模型运行指标 / Token 实时统计（按端口） 🆕 |
 | `GET /api/logs` | GET | Get system logs |
 
 ### System
@@ -326,6 +334,7 @@ RFC docs are in `rfcs/`. Plugin development guide coming soon.
 - 🆕 Log management system
 - 🆕 Statistics and analytics
 - 🆕 API key usage statistics
+- 🆕 模型运行指标 / Token 实时统计（真实峰值 tok/s、MTP 接受率、累计入/出）
 
 ### Upcoming Features: v0.2.0
 - [ ] Tauri desktop application
