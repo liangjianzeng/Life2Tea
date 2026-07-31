@@ -174,38 +174,68 @@
       </div>
     </div>
 
-    <!-- Token 统计 & 模型指标 -->
-    <div class="info-cards">
-      <div class="info-card">
-        <div class="info-icon token-icon">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M4 6h16M4 12h16M4 18h10" />
-          </svg>
+
+    <!-- 模型运行指标 · Token 实时统计 -->
+    <div class="model-metrics-section">
+      <div class="section-header">
+        <h3>模型运行指标 · Token 实时统计</h3>
+        <span class="live-badge" :class="{ 'live-on': modelServers.length }">{{ modelServers.length ? '● LIVE ' + modelServers.length : '○ 无运行实例' }}</span>
+      </div>
+
+      <div class="model-cards" v-if="modelServers.length">
+        <div class="model-card" v-for="s in modelServers" :key="s.port">
+          <div class="mc-head">
+            <span class="mc-model" :title="s.model_path">{{ s.model || ('pid ' + s.pid) }}</span>
+            <span class="mc-badge" :class="s.source === 'metrics' ? 'badge-metrics' : 'badge-probe'">{{ s.source === 'metrics' ? '被动' : '探测' }}</span>
+          </div>
+          <div class="mc-port">:{{ s.port }}</div>
+          <div class="mc-tps">
+            <span class="mc-tps-val">{{ s.tok_s_peak != null ? s.tok_s_peak.toFixed(1) : '—' }}</span>
+            <span class="mc-tps-unit">tok/s</span>
+            <span class="mc-peak-tag">峰值</span>
+          </div>
+          <div class="mc-sub">
+            <span v-if="s.mtp && s.mtp.enabled" class="mc-mtp">MTP {{ (s.mtp.acceptance * 100).toFixed(0) }}%</span>
+            <span v-else class="mc-mtp-off">MTP 关</span>
+            <span class="mc-mem" v-if="s.rss_memory_bytes">{{ (s.rss_memory_bytes / 1073741824).toFixed(1) }} GB</span>
+            <span class="mc-cur" v-if="s.tok_s != null">现 {{ s.tok_s.toFixed(1) }}</span>
+          </div>
+          <div class="mc-foot mc-cum" v-if="s.total_prompt_tokens != null || s.total_predicted_tokens != null">
+            <span v-if="s.total_prompt_tokens != null">累计入 {{ formatTokens(s.total_prompt_tokens) }}</span>
+            <span v-if="s.total_predicted_tokens != null">累计出 {{ formatTokens(s.total_predicted_tokens) }}</span>
+          </div>
+          <div class="mc-foot" v-if="(s.prompt_tok_s_peak != null) || (s.kv_cache_used != null && s.kv_cache_total)">
+            <span v-if="s.prompt_tok_s_peak != null">预填充 峰值{{ s.prompt_tok_s_peak.toFixed(0) }}/s<span v-if="s.prompt_tok_s != null" class="mc-cur-inline"> 现{{ s.prompt_tok_s.toFixed(0) }}</span></span>
+            <span v-if="s.kv_cache_used != null && s.kv_cache_total">KV {{ (s.kv_cache_used / s.kv_cache_total * 100).toFixed(0) }}%</span>
+          </div>
         </div>
-        <div class="info-content">
-          <h4>{{ t("dashboard.tokenStats") }}</h4>
-          <p class="coming-soon">{{ t("dashboard.comingSoon") }}</p>
-          <p class="info-desc">{{ t("dashboard.tokenDesc") }}</p>
+
+        <div class="model-card summary" v-if="modelSummary">
+          <div class="mc-head">
+            <span class="mc-model">GPU / 系统</span>
+          </div>
+          <div class="mc-port">SM {{ modelSummary.gpu && modelSummary.gpu.utilization != null ? modelSummary.gpu.utilization : '—' }}%</div>
+          <div class="mc-tps">
+            <span class="mc-tps-val">{{ modelSummary.gpu && modelSummary.gpu.temperature_c != null ? modelSummary.gpu.temperature_c : '—' }}</span>
+            <span class="mc-tps-unit">°C</span>
+          </div>
+          <div class="mc-sub">
+            <span v-if="modelSummary.gpu && modelSummary.gpu.memory_used" class="mc-mem">{{ (modelSummary.gpu.memory_used / 1073741824).toFixed(0) }} GB</span>
+            <span v-else class="mc-mtp-off">统一内存</span>
+          </div>
+          <div class="mc-foot">
+            <span>系统内存 {{ modelSummary.system_memory ? modelSummary.system_memory.percent : '—' }}%</span>
+          </div>
         </div>
       </div>
 
-      <div class="info-card">
-        <div class="info-icon model-icon">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="3" y="3" width="18" height="18" rx="3" />
-            <circle cx="9" cy="9" r="2" /><circle cx="15" cy="9" r="2" />
-            <path d="M9 15l6 6M15 15l-6 6" />
-          </svg>
-        </div>
-        <div class="info-content">
-          <h4>{{ t("dashboard.modelMetrics") }}</h4>
-          <p class="coming-soon">{{ t("dashboard.comingSoon") }}</p>
-          <p class="info-desc">{{ t("dashboard.modelDesc") }}</p>
-        </div>
+      <div class="model-empty" v-else>
+        未发现运行中的 llama.cpp 服务（已扫描系统进程）
       </div>
     </div>
 
-    <!-- 延迟分布 -->
+
+        <!-- 延迟分布 -->
     <div class="chart-panel">
       <div class="chart-header">
         <h3>{{ t("dashboard.latencyDistribution") }}</h3>
@@ -243,7 +273,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from "vue";
 import { useI18n } from "vue-i18n";
-import { getStatsDashboard, getSystemMetrics, getApiKeyStats, getPerformanceMetrics, getResourceUsage, getRecentLogs } from "../services/stats";
+import { getStatsDashboard, getSystemMetrics, getApiKeyStats, getPerformanceMetrics, getResourceUsage, getRecentLogs, getModelMetrics } from "../services/stats";
 import LineChart from "../components/LineChart.vue";
 
 const { t } = useI18n();
@@ -268,6 +298,9 @@ const resourceHistory = ref<any[]>([]);
 const perfMetrics = ref<any[]>([]);
 const apiKeys = ref<any[]>([]);
 const recentLogs = ref<any[]>([]);
+
+const modelServers = ref<any[]>([]);
+const modelSummary = ref<any>(null);
 
 const loading = ref(false);
 const activeResourceTab = ref("1h");
@@ -307,6 +340,13 @@ function formatMemoryTotal(total: number): string {
   return `${(total / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
+function formatTokens(n: number): string {
+  if (n === null || n === undefined) return "—";
+  if (n >= 1000000) return (n / 1000000).toFixed(2) + "M";
+  if (n >= 1000) return (n / 1000).toFixed(1) + "K";
+  return String(n);
+}
+
 function formatNetwork(bytes: number): string {
   if (!bytes) return "0 B";
   if (bytes > 1024 * 1024 * 1024) return (bytes / 1024 / 1024 / 1024).toFixed(1) + " GB";
@@ -336,15 +376,20 @@ function formatTime(ts: string | null): string {
 // ── Fetch functions ──
 async function refreshDashboard() {
   try {
-    const [dash, keys, perf] = await Promise.all([
+    const [dash, keys, perf, mm] = await Promise.all([
       getStatsDashboard(),
       getApiKeyStats(),
       getPerformanceMetrics(),
+      getModelMetrics().catch(() => null),
     ]);
 
     stats.value = dash.stats || {};
     apiKeys.value = keys.data?.slice(0, 6) || [];
     perfMetrics.value = perf.data || [];
+    if (mm && mm.data) {
+      modelServers.value = mm.data.servers || [];
+      modelSummary.value = mm.data;
+    }
   } catch (e) {
     console.error("Failed to refresh dashboard:", e);
   }
@@ -859,4 +904,159 @@ onUnmounted(() => {
     align-items: flex-start;
   }
 }
+
+/* 模型运行指标 · Token 实时统计 */
+.model-metrics-section {
+  margin-bottom: 24px;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.section-header h3 {
+  margin: 0;
+  font-size: 1em;
+  color: #e0e0ff;
+}
+
+.live-badge {
+  font-size: 0.72em;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 10px;
+  background: rgba(120, 120, 140, 0.15);
+  color: #888;
+}
+
+.live-badge.live-on {
+  background: rgba(16, 185, 129, 0.15);
+  color: #34d399;
+}
+
+.model-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+}
+
+.model-card {
+  background: #1a1a2e;
+  border: 1px solid #2d2d4a;
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: border-color 0.2s;
+}
+
+.model-card:hover {
+  border-color: #534ab7;
+}
+
+.model-card.summary {
+  border-color: #2d4a3d;
+  background: #16241d;
+}
+
+.mc-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.mc-model {
+  font-size: 0.82em;
+  color: #c0c0e0;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mc-badge {
+  font-size: 0.65em;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.badge-metrics { background: rgba(99, 102, 241, 0.18); color: #818cf8; }
+.badge-probe { background: rgba(245, 158, 11, 0.18); color: #fbbf24; }
+
+.mc-port {
+  font-size: 0.72em;
+  color: #666;
+  font-family: 'Fira Code', monospace;
+}
+
+.mc-tps {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 2px 0;
+}
+
+.mc-peak-tag {
+  font-size: 0.58em;
+  color: #f59e0b;
+  margin-left: 5px;
+  align-self: flex-start;
+  border: 1px solid #f59e0b55;
+  border-radius: 4px;
+  padding: 0 3px;
+  line-height: 1.3;
+}
+.mc-cur {
+  font-size: 0.72em;
+  color: #94a3b8;
+}
+.mc-tps-val {
+  font-size: 1.5em;
+  font-weight: 700;
+  color: #34d399;
+}
+
+.model-card.summary .mc-tps-val { color: #fbbf24; }
+
+.mc-tps-unit {
+  font-size: 0.75em;
+  color: #888;
+}
+
+.mc-sub {
+  display: flex;
+  gap: 10px;
+  font-size: 0.75em;
+  color: #888;
+}
+
+.mc-mtp { color: #a78bfa; font-weight: 600; }
+.mc-mtp-off { color: #555; }
+.mc-mem { color: #60a5fa; }
+
+.mc-foot {
+  display: flex;
+  gap: 10px;
+  font-size: 0.7em;
+  color: #666;
+  margin-top: 2px;
+}
+
+.model-empty {
+  padding: 24px;
+  text-align: center;
+  color: #666;
+  font-size: 0.85em;
+  background: #1a1a2e;
+  border: 1px dashed #2d2d4a;
+  border-radius: 12px;
+}
+
 </style>

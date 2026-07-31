@@ -81,3 +81,13 @@ export async function getRecentLogs(limit: number = 50, level?: string) {
   if (!res.ok) throw new Error(`Logs: ${res.status}`);
   return res.json();
 }
+
+
+/**
+ * Fetch live model server metrics (discovered llama.cpp processes).
+ */
+export async function getModelMetrics() {
+  const res = await fetch(`${API_BASE}/stats/model-metrics`, { credentials: "include" });
+  if (!res.ok) throw new Error(`Model metrics: ${res.status}`);
+  return res.json();
+}

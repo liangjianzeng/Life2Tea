@@ -11,6 +11,9 @@ import platform
 import os
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
+import threading
+import time
+import json
 
 from .database import Database
 
@@ -541,38 +544,392 @@ class StatsService:
         finally:
             conn.close()
 
-    def get_model_metrics(self) -> Dict[str, Any]:
-        """Get model running metrics."""
-        conn = self.db.get_connection()
+    # ── Live llama.cpp server metrics (process discovery) ──
+    _MODEL_METRICS_PREV = {}
+    _MTP_PROBE_TS = {}
+    _MTP_CACHE = {}  # {port: {"ts": float, "mtp": dict}}
+    _PROBE_TOKENS = {}  # {port: {"ts": float, "pred": int, "prompt": int}}
+
+    _PROMPT_TOK_S_SAMPLES = {}  # {port: [(ts, prompt_tok_s), ...]}
+    _TOK_S_SAMPLES = {}  # {port: [(ts:float, tok_s:float), ...]} pruned to last 60s
+    _PEAK_STORE_PATH = "/tmp/life2tea_model_metrics_peak.json"
+    _RATE_PROBE_TS = {}  # {port: epoch} throttle for the per-request rate probe
+
+    def _http_get_text(self, url: str, timeout: int = 3) -> str:
+        import urllib.request
+        req = urllib.request.Request(url, headers={"Accept": "*/*"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.read().decode("utf-8", "replace")
+
+    def _http_get_json(self, url: str, timeout: int = 3):
+        import json as _json
+        return _json.loads(self._http_get_text(url, timeout))
+
+    def _parse_llamacpp_metrics(self, text: str) -> dict:
+        import re as _re
+        result = {}
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "{" in line or "\"" in line:
+                continue
+            m = _re.match(r"^([A-Za-z_:]+)\s+([-\d.eE+]+)$", line)
+            if m:
+                try:
+                    result[m.group(1)] = float(m.group(2))
+                except ValueError:
+                    pass
+        return result
+
+    def _apply_parsed_metrics(self, entry: dict, parsed: dict, port: int) -> None:
+        """Compute the CURRENT (poll-window) tok/s + pre-fill rate from llama.cpp's
+        own decode-time counters, plus cumulative lifetime totals. The 1-minute PEAK
+        is sourced separately from per-request timings (see get_model_metrics) because
+        predicted_seconds_total advances in bursts, so a short-window counter average
+        reads ~0 most of the time and can never surface a true peak."""
+        prev = StatsService._MODEL_METRICS_PREV.get(port)
+        pred = parsed.get("llamacpp:tokens_predicted_total")
+        pred_sec = parsed.get("llamacpp:tokens_predicted_seconds_total")
+        prompt = parsed.get("llamacpp:prompt_tokens_total")
+        prompt_sec = parsed.get("llamacpp:prompt_seconds_total")
+
+        # Subtract backend's own probe tokens so an idle server that only received a
+        # probe shows 0 tok/s instead of a fake decode rate.
+        import time as _t
+        _now = _t.time()
+        rec = StatsService._PROBE_TOKENS.get(port)
+        _in = bool(rec and prev and prev.get("ts", 0) < rec["ts"] <= _now)
+        _probe_pred = rec.get("pred", 0) if _in else 0
+        _probe_prompt = rec.get("prompt", 0) if _in else 0
+
+        tok_s = 0.0
+        if prev and "pred" in prev and "pred_sec" in prev and pred is not None and pred_sec is not None:
+            dp = pred - prev["pred"] - _probe_pred
+            ds = pred_sec - prev["pred_sec"]
+            if dp > 0 and ds > 0:
+                tok_s = dp / ds
+        entry["tok_s"] = tok_s
+
+        prompt_tok_s = 0.0
+        if prev and "prompt" in prev and "prompt_sec" in prev and prompt is not None and prompt_sec is not None:
+            dp = prompt - prev["prompt"] - _probe_prompt
+            ds = prompt_sec - prev["prompt_sec"]
+            if dp > 0 and ds > 0:
+                prompt_tok_s = dp / ds
+        entry["prompt_tok_s"] = prompt_tok_s
+
+        entry["total_prompt_tokens"] = prompt
+        entry["total_predicted_tokens"] = pred
+
+        # Peak is sourced from per-request timings via _record_peak(); surface the
+        # latest stored 60s max so it persists between the throttled probes.
+        _pk = StatsService._load_peak_store().get(str(port), {})
+        entry["tok_s_peak"] = max((v for _, v in _pk.get("tok_s", [])), default=None)
+        entry["prompt_tok_s_peak"] = max((v for _, v in _pk.get("prompt_tok_s", [])), default=None)
+
+        StatsService._MODEL_METRICS_PREV[port] = {
+            "ts": _now, "pred": pred, "pred_sec": pred_sec,
+            "prompt": prompt, "prompt_sec": prompt_sec,
+        }
+
+    @classmethod
+    def _record_peak(cls, port: int, tok_s, prompt_tok_s):
+        import time as _t
+        now = _t.time()
+        store = cls._load_peak_store()
+        p = store.setdefault(str(port), {"tok_s": [], "prompt_tok_s": []})
+        if tok_s and tok_s > 0:
+            p.setdefault("tok_s", []).append([now, tok_s])
+        if prompt_tok_s and prompt_tok_s > 0:
+            p.setdefault("prompt_tok_s", []).append([now, prompt_tok_s])
+        p["tok_s"] = [[ts, v] for ts, v in p.get("tok_s", []) if ts > now - 60]
+        p["prompt_tok_s"] = [[ts, v] for ts, v in p.get("prompt_tok_s", []) if ts > now - 60]
+        cls._save_peak_store(store)
+        peak_tok = max((v for _, v in p["tok_s"]), default=None)
+        peak_prompt = max((v for _, v in p["prompt_tok_s"]), default=None)
+        return peak_tok, peak_prompt
+
+    @classmethod
+    def _load_peak_store(cls):
         try:
-            # Query system metrics for GPU/CPU utilization
-            query = """
-                SELECT timestamp, gpu_utilization, gpu_memory_used, gpu_memory_total,
-                       cpu_usage, memory_percent
-                FROM system_metrics
-                ORDER BY timestamp DESC
-                LIMIT 100
-            """
-            cursor = conn.execute(query)
-            rows = cursor.fetchall()
+            with open(cls._PEAK_STORE_PATH, "r") as f:
+                return json.load(f)
+        except Exception:
+            return {}
 
-            metrics = []
-            for row in rows:
-                metrics.append({
-                    "timestamp": row[0],
-                    "gpu_utilization": row[1],
-                    "gpu_memory_used": row[2],
-                    "gpu_memory_total": row[3],
-                    "cpu_usage": row[4],
-                    "memory_percent": row[5],
-                })
+    @classmethod
+    def _save_peak_store(cls, store):
+        try:
+            tmp = cls._PEAK_STORE_PATH + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(store, f)
+            os.replace(tmp, cls._PEAK_STORE_PATH)
+        except Exception:
+            pass
 
-            return {"data": metrics}
+
+    def _probe_server(self, port: int) -> dict:
+        import json as _json, urllib.request, time as _time
+
+        def _counter(name):
+            try:
+                txt = self._http_get_text(f"http://127.0.0.1:{port}/metrics", timeout=2)
+                return self._parse_llamacpp_metrics(txt).get(name)
+            except Exception:
+                return None
+
+        pre_pred = _counter("llamacpp:tokens_predicted_total")
+        pre_prompt = _counter("llamacpp:prompt_tokens_total")
+        payload = _json.dumps({
+            "prompt": "Reply with the single word: ok",
+            "n_predict": 64,
+            "temperature": 0,
+            "cache_prompt": True,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/completion",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=25) as r:
+            d = _json.loads(r.read().decode("utf-8", "replace"))
+        post_pred = _counter("llamacpp:tokens_predicted_total")
+        post_prompt = _counter("llamacpp:prompt_tokens_total")
+        _pred_delta = (post_pred - pre_pred) if (pre_pred is not None and post_pred is not None) else 0
+        _prompt_delta = (post_prompt - pre_prompt) if (pre_prompt is not None and post_prompt is not None) else 0
+        if _pred_delta < 0:
+            _pred_delta = 0
+        if _prompt_delta < 0:
+            _prompt_delta = 0
+        StatsService._PROBE_TOKENS[port] = {
+            "ts": _time.time(), "pred": int(_pred_delta), "prompt": int(_prompt_delta)
+        }
+        t = d.get("timings") or {}
+        draft_n = t.get("draft_n")
+        draft_accepted = t.get("draft_n_accepted")
+        mtp = {"enabled": False, "acceptance": None, "drafted": None, "accepted": None}
+        if draft_n and draft_n > 0:
+            mtp = {
+                "enabled": True,
+                "acceptance": (draft_accepted / draft_n) if draft_accepted is not None else None,
+                "drafted": draft_n,
+                "accepted": draft_accepted,
+            }
+        return {
+            "tok_s": t.get("predicted_per_second"),
+            "prompt_tok_s": t.get("prompt_per_second"),
+            "mtp": mtp,
+        }
+
+    def get_model_metrics(self) -> Dict[str, Any]:
+        """Discover running llama.cpp servers and sample live metrics.
+
+        Discovery is process-based: we scan live llama-server processes,
+        resolve each one's listening port, then sample tok/s + MTP acceptance.
+        Passive /metrics (when started with --metrics) is preferred; otherwise
+        a short probe completion is used.
+        """
+        import time
+        servers = []
+        seen_ports = set()
+        try:
+            for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+                try:
+                    info = proc.info
+                    cmd = info.get("cmdline") or []
+                except Exception:
+                    continue
+                if not cmd:
+                    continue
+                cmd_str = " ".join(cmd)
+                if not ("llama-server" in cmd_str or "llama.cpp/build/bin" in cmd_str):
+                    continue
+                pid = info.get("pid")
+                port = None
+                for i, a in enumerate(cmd):
+                    if a in ("--port", "-p", "--grpc-port") and i + 1 < len(cmd):
+                        try:
+                            port = int(cmd[i + 1])
+                        except ValueError:
+                            pass
+                    elif a.startswith("--port="):
+                        try:
+                            port = int(a.split("=", 1)[1])
+                        except ValueError:
+                            pass
+                if port is None:
+                    try:
+                        for c in proc.net_connections(kind="tcp"):
+                            if getattr(c, "status", None) == "LISTEN" and c.laddr:
+                                port = c.laddr.port
+                                break
+                    except Exception:
+                        pass
+                if port is None or port in seen_ports:
+                    continue
+                seen_ports.add(port)
+
+                entry = {
+                    "pid": pid,
+                    "port": port,
+                    "model": None,
+                    "model_path": None,
+                    "rss_memory_bytes": None,
+                    "tok_s": None,
+                    "prompt_tok_s": None,
+                    "total_prompt_tokens": None,
+                    "total_predicted_tokens": None,
+                    "kv_cache_used": None,
+                    "kv_cache_total": None,
+                    "mtp": {"enabled": False, "acceptance": None,
+                            "drafted": None, "accepted": None},
+                    "source": None,
+                    "alive": True,
+                    "error": None,
+                }
+
+                # Reuse recently sampled MTP so the card doesn't flicker
+                # between probes (each request builds a fresh entry).
+                _now = time.time()
+                _cached = StatsService._MTP_CACHE.get(port)
+                if _cached and (_now - _cached["ts"]) < 60:
+                    entry["mtp"] = _cached["mtp"]
+
+                try:
+                    mi = proc.memory_info()
+                    entry["rss_memory_bytes"] = getattr(mi, "rss", None)
+                except Exception:
+                    pass
+
+                try:
+                    m = self._http_get_json(f"http://127.0.0.1:{port}/v1/models")
+                    models = (m or {}).get("models") or []
+                    if models:
+                        entry["model_path"] = models[0].get("model") or models[0].get("name")
+                        entry["model"] = (entry["model_path"] or "").rsplit("/", 1)[-1]
+                except Exception:
+                    for i, a in enumerate(cmd):
+                        if a in ("--model", "-m") and i + 1 < len(cmd):
+                            entry["model_path"] = cmd[i + 1]
+                            entry["model"] = cmd[i + 1].rsplit("/", 1)[-1]
+                        elif a.startswith("--model="):
+                            entry["model_path"] = a.split("=", 1)[1]
+                            entry["model"] = entry["model_path"].rsplit("/", 1)[-1]
+
+                metrics_text = None
+                try:
+                    metrics_text = self._http_get_text(f"http://127.0.0.1:{port}/metrics", timeout=2)
+                except Exception:
+                    metrics_text = None
+
+                if metrics_text and "Not Implemented" not in metrics_text and "not supported" not in metrics_text:
+                    parsed = self._parse_llamacpp_metrics(metrics_text)
+                    self._apply_parsed_metrics(entry, parsed, port)
+                    entry["source"] = "metrics"
+                    # The true peak decode rate comes from per-request timings
+                    # (predicted_per_second), not the bursty cumulative counter. Fire
+                    # one throttled probe (~10s) that also refreshes MTP acceptance;
+                    # its timings give the genuine peak within the rolling minute.
+                    # Probe tokens are subtracted from the counter rate, so idle still
+                    # shows 0 current tok/s while the peak reflects the real speed.
+                    _now = time.time()
+                    if _now - StatsService._RATE_PROBE_TS.get(port, 0) > 10:
+                        try:
+                            _pr = self._probe_server(port)
+                            if _pr.get("mtp", {}).get("enabled"):
+                                entry["mtp"] = _pr["mtp"]
+                                StatsService._MTP_CACHE[port] = {"ts": _now, "mtp": _pr["mtp"]}
+                            pk_tok, pk_prompt = StatsService._record_peak(
+                                port, _pr.get("tok_s"), _pr.get("prompt_tok_s")
+                            )
+                            entry["tok_s_peak"] = pk_tok
+                            entry["prompt_tok_s_peak"] = pk_prompt
+                            StatsService._RATE_PROBE_TS[port] = _now
+                            StatsService._MTP_PROBE_TS[port] = _now
+                        except Exception as _e:
+                            StatsService._RATE_PROBE_TS[port] = _now - 7
+                            StatsService._MTP_PROBE_TS[port] = _now - 50
+                            print(f"[model-metrics] rate probe failed port {port}: {_e!r}", flush=True)
+                else:
+                    try:
+                        pr = self._probe_server(port)
+                        entry["tok_s"] = pr.get("tok_s")
+                        entry["prompt_tok_s"] = pr.get("prompt_tok_s")
+                        pk_tok, pk_prompt = StatsService._record_peak(
+                            port, pr.get("tok_s"), pr.get("prompt_tok_s")
+                        )
+                        entry["tok_s_peak"] = pk_tok
+                        entry["prompt_tok_s_peak"] = pk_prompt
+                        if pr.get("mtp", {}).get("enabled"):
+                            entry["mtp"] = pr["mtp"]
+                            StatsService._MTP_CACHE[port] = {"ts": _now, "mtp": pr["mtp"]}
+                        entry["source"] = "probe"
+                        # best-effort cumulative totals even in probe-only mode
+                        try:
+                            _mt = self._parse_llamacpp_metrics(
+                                self._http_get_text(f"http://127.0.0.1:{port}/metrics", timeout=2)
+                            )
+                            entry["total_predicted_tokens"] = _mt.get("llamacpp:tokens_predicted_total")
+                            entry["total_prompt_tokens"] = _mt.get("llamacpp:prompt_tokens_total")
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        entry["error"] = f"probe failed: {e}"
+                        entry["alive"] = False
+
+                servers.append(entry)
         except Exception as e:
-            print(f"Error getting model metrics: {e}")
-            return {"data": []}
-        finally:
-            conn.close()
+            print(f"[model-metrics] discovery error: {e}")
+
+        # system-wide GPU + memory (GB10 unified memory: memory may be [N/A])
+        gpu = None
+        try:
+            import subprocess as _sp
+            out = _sp.run(
+                ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu",
+                 "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=3,
+            ).stdout
+            if out:
+                parts = [p.strip() for p in out.split(",")]
+
+                def _num(x):
+                    x = (x or "").strip()
+                    if x == "" or x.upper() == "[N/A]" or x.upper() == "N/A":
+                        return None
+                    try:
+                        return float(x)
+                    except ValueError:
+                        return None
+
+                if parts:
+                    gpu = {
+                        "utilization": _num(parts[0]),
+                        "memory_used": (_num(parts[1]) * 1024 * 1024) if (len(parts) > 1 and _num(parts[1]) is not None) else None,
+                        "memory_total": (_num(parts[2]) * 1024 * 1024) if (len(parts) > 2 and _num(parts[2]) is not None) else None,
+                        "temperature_c": _num(parts[3]) if len(parts) > 3 else None,
+                    }
+        except Exception:
+            gpu = None
+
+        vmem = psutil.virtual_memory()
+
+        return {
+            "data": {
+                "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime()),
+                "discovered_count": len(servers),
+                "gpu": gpu,
+                "system_memory": {
+                    "used": vmem.used,
+                    "total": vmem.total,
+                    "percent": vmem.percent,
+                },
+                "servers": servers,
+            }
+        }
+
 
     def _ensure_disk_io_columns(self, conn):
         """Add disk_io columns if they don't exist (DB migration)."""
