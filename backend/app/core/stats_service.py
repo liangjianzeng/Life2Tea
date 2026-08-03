@@ -622,11 +622,13 @@ class StatsService:
         entry["total_prompt_tokens"] = prompt
         entry["total_predicted_tokens"] = pred
 
-        # Peak is sourced from per-request timings via _record_peak(); surface the
-        # latest stored 60s max so it persists between the throttled probes.
-        _pk = StatsService._load_peak_store().get(str(port), {})
-        entry["tok_s_peak"] = max((v for _, v in _pk.get("tok_s", [])), default=None)
-        entry["prompt_tok_s_peak"] = max((v for _, v in _pk.get("prompt_tok_s", [])), default=None)
+        # Peak comes from both per-request timings (probe) and real /metrics
+        # windows. The probe's tiny prompt gives a low prefill peak, so we also
+        # feed the live metrics-window rate into the rolling 60s max. This makes
+        # the dashboard "prefill peak" track actual observed prefill bursts.
+        peak_tok, peak_prompt = StatsService._record_peak(port, tok_s, prompt_tok_s)
+        entry["tok_s_peak"] = peak_tok
+        entry["prompt_tok_s_peak"] = peak_prompt
 
         StatsService._MODEL_METRICS_PREV[port] = {
             "ts": _now, "pred": pred, "pred_sec": pred_sec,
