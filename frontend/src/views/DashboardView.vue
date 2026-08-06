@@ -195,8 +195,8 @@
             <span class="mc-peak-tag">峰值</span>
           </div>
           <div class="mc-sub">
-            <span v-if="s.mtp && s.mtp.enabled" class="mc-mtp">MTP {{ (s.mtp.acceptance * 100).toFixed(0) }}%</span>
-            <span v-else class="mc-mtp-off">MTP 关</span>
+            <span v-if="s.spec && s.spec.enabled" class="mc-mtp" :title="specTitle(s)">{{ s.spec.label }} 开<span v-if="s.mtp && s.mtp.acceptance != null"> {{ (s.mtp.acceptance * 100).toFixed(0) }}%</span></span>
+            <span v-else class="mc-mtp-off">投机 关</span>
             <span class="mc-mem" v-if="s.rss_memory_bytes">{{ (s.rss_memory_bytes / 1073741824).toFixed(1) }} GB</span>
             <span class="mc-cur" v-if="s.tok_s != null">现 {{ s.tok_s.toFixed(1) }}</span>
           </div>
@@ -340,11 +340,24 @@ function formatMemoryTotal(total: number): string {
   return `${(total / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
+function specTitle(s: any): string {
+  const sp = s && s.spec
+  if (!sp || !sp.enabled) return '未启用投机解码'
+  const parts: string[] = ['投机解码: ' + (sp.kind || sp.label)]
+  if (sp.draft_model) parts.push('草稿模型: ' + sp.draft_model)
+  if (sp.n_max) parts.push('n_max: ' + sp.n_max)
+  if (s.mtp && s.mtp.acceptance != null) {
+    parts.push('接受率: ' + (s.mtp.acceptance * 100).toFixed(1) + '%')
+  }
+  return parts.join('\n')
+}
+
 function formatTokens(n: number): string {
   if (n === null || n === undefined) return "—";
-  if (n >= 1000000) return (n / 1000000).toFixed(2) + "M";
-  if (n >= 1000) return (n / 1000).toFixed(1) + "K";
-  return String(n);
+  // Show exact counts (thousand-separated) so small increments are visible.
+  // Abbreviating to 0.1K hid every change smaller than 100 tokens, which made
+  // the cumulative counters look frozen during cached multi-turn chats.
+  return Math.round(n).toLocaleString("en-US");
 }
 
 function formatNetwork(bytes: number): string {

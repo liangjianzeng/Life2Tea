@@ -1,3 +1,4 @@
+import re
 """
 stats_service.py — System Statistics Service
 
@@ -16,6 +17,114 @@ import time
 import json
 
 from .database import Database
+
+
+
+# --- model display name helpers (added 2026-08-06) ---------------------------
+# GGUF 文件名 → 可读模型名。规则：去扩展名 / 去分片编号 / 从右往左剥离
+# 量化、格式、打包标记 token，遇到第一个「非丢弃类」token 即停止，
+# 避免误伤 Ornith-1.0-35B-MTP-APEX-I-Balanced 这类含大写标记的正式名字。
+_SHARD_RE = re.compile(r"[-_]\d{3,6}[-_]of[-_]\d{3,6}$", re.I)
+_DROP_TOKEN_RES = [
+    re.compile(r"^UD$", re.I),                       # Unsloth Dynamic 前缀
+    re.compile(r"^I?Q\d[A-Z0-9_]*$", re.I),          # Q4_K_M / IQ2_M / Q8_0 / IQ3_XXS
+    re.compile(r"^(BF16|F16|F32|FP16|FP32)$", re.I),  # 浮点格式
+    re.compile(r"^(MX|NV)FP\d[A-Z0-9_]*$", re.I),     # MXFP4_MOE / NVFP4
+    re.compile(r"^(mtp|imatrix|imat|gguf)$", re.I),   # 打包标记
+]
+
+
+def _is_drop_token(tok: str) -> bool:
+    return any(r.match(tok) for r in _DROP_TOKEN_RES)
+
+
+def _clean_model_name(path_or_name):
+    """把 GGUF 路径/文件名规整成模型名；失败时返回原始 basename。"""
+    if not path_or_name:
+        return None
+    raw = str(path_or_name).replace("\\", "/").rsplit("/", 1)[-1]
+    name = re.sub(r"\.gguf$", "", raw, flags=re.I)
+    name = _SHARD_RE.sub("", name)
+    parts = name.split("-")
+    while len(parts) > 1 and _is_drop_token(parts[-1]):
+        parts.pop()
+    cleaned = "-".join(parts).strip("-_ ")
+    return cleaned or raw
+
+
+def _display_model_name(alias, model_path):
+    """alias 若已是有意义的别名（非路径）则直接用，否则清洗文件路径。"""
+    if alias and "/" not in str(alias) and not str(alias).lower().endswith(".gguf"):
+        return str(alias)
+    return _clean_model_name(model_path)
+# ---------------------------------------------------------------------------
+
+
+
+# ── 投机解码（speculative decoding）类型检测 ─────────────────────────────
+# 判定依据是 llama-server 的启动命令行，而不是发探测请求看 timings.draft_n：
+#   * 命令行是权威来源，100% 准确，零开销；
+#   * 探测请求在服务繁忙时会排进 llama.cpp 任务队列直接超时，导致误判为"关"。
+_SPEC_LABELS = {
+    "draft-mtp": "MTP",
+    "draft-dspark": "DSpark",
+    "draft-eagle": "EAGLE",
+    "draft-eagle3": "EAGLE3",
+    "draft-medusa": "Medusa",
+    "draft-lookahead": "Lookahead",
+    "draft-ngram": "N-gram",
+    "draft-model": "草稿模型",
+}
+_SPEC_OFF = {"", "none", "off", "no", "disabled", "0"}
+
+
+def _detect_spec(cmd) -> dict:
+    """从 llama-server 命令行解析投机解码配置。"""
+    spec_type = None
+    draft_model = None
+    n_max = None
+    cmd = list(cmd or [])
+    for i, a in enumerate(cmd):
+        if a == "--spec-type" and i + 1 < len(cmd):
+            spec_type = cmd[i + 1]
+        elif a.startswith("--spec-type="):
+            spec_type = a.split("=", 1)[1]
+        elif a in ("-md", "--model-draft") and i + 1 < len(cmd):
+            draft_model = cmd[i + 1]
+        elif a.startswith("--model-draft="):
+            draft_model = a.split("=", 1)[1]
+        elif a in ("--spec-draft-n-max", "--draft-max", "--draft-n-max", "--draft") and i + 1 < len(cmd):
+            try:
+                n_max = int(cmd[i + 1])
+            except (ValueError, TypeError):
+                pass
+        elif a.startswith(("--spec-draft-n-max=", "--draft-max=", "--draft=")):
+            try:
+                n_max = int(a.split("=", 1)[1])
+            except (ValueError, TypeError):
+                pass
+
+    st = (spec_type or "").strip().lower()
+    if st and st not in _SPEC_OFF:
+        label = _SPEC_LABELS.get(st)
+        if not label:
+            # 未知类型：去掉 draft- 前缀后大写，例如 draft-foo -> FOO
+            label = re.sub(r"^draft[-_]", "", st).upper() or st
+        kind = st
+        enabled = True
+    elif draft_model:
+        # 只给了 -md 没给 --spec-type：经典 draft-model 投机
+        kind, label, enabled = "draft-model", "草稿模型", True
+    else:
+        kind, label, enabled = None, None, False
+
+    return {
+        "enabled": enabled,
+        "kind": kind,
+        "label": label,
+        "n_max": n_max,
+        "draft_model": (os.path.basename(draft_model) if draft_model else None),
+    }
 
 
 class StatsService:
@@ -546,14 +655,12 @@ class StatsService:
 
     # ── Live llama.cpp server metrics (process discovery) ──
     _MODEL_METRICS_PREV = {}
-    _MTP_PROBE_TS = {}
-    _MTP_CACHE = {}  # {port: {"ts": float, "mtp": dict}}
+    _MTP_CACHE = {}  # {port: {"ts": float, "mtp": dict, "pid": int}}
     _PROBE_TOKENS = {}  # {port: {"ts": float, "pred": int, "prompt": int}}
 
     _PROMPT_TOK_S_SAMPLES = {}  # {port: [(ts, prompt_tok_s), ...]}
     _TOK_S_SAMPLES = {}  # {port: [(ts:float, tok_s:float), ...]} pruned to last 60s
     _PEAK_STORE_PATH = "/tmp/life2tea_model_metrics_peak.json"
-    _RATE_PROBE_TS = {}  # {port: epoch} throttle for the per-request rate probe
 
     def _http_get_text(self, url: str, timeout: int = 3) -> str:
         import urllib.request
@@ -583,49 +690,65 @@ class StatsService:
         return result
 
     def _apply_parsed_metrics(self, entry: dict, parsed: dict, port: int) -> None:
-        """Compute the CURRENT (poll-window) tok/s + pre-fill rate from llama.cpp's
-        own decode-time counters, plus cumulative lifetime totals. The 1-minute PEAK
-        is sourced separately from per-request timings (see get_model_metrics) because
-        predicted_seconds_total advances in bursts, so a short-window counter average
-        reads ~0 most of the time and can never surface a true peak."""
+        """填充当前速率 + 累计总量。
+
+        取值优先级（预填充 / 解码同理）：
+          1) llama.cpp 原生速率 gauge —— llamacpp:prompt_tokens_seconds 与
+             llamacpp:predicted_tokens_seconds。这是 llama.cpp 内部按真实请求
+             计时算出的平均速率，比我们自己差分更准，也不受探测请求污染。
+          2) counter 差分（tokens_total / seconds_total 的窗口增量）作为兜底，
+             用于个别 build 不导出 gauge 的情况。
+          3) 若本轮无新增流量（空闲），回退到持久化的最近一次有效值(sticky)，
+             使仪表盘长期显示数值，而不是一空闲就归零/消失。
+        """
+        import time as _t
+
         prev = StatsService._MODEL_METRICS_PREV.get(port)
         pred = parsed.get("llamacpp:tokens_predicted_total")
         pred_sec = parsed.get("llamacpp:tokens_predicted_seconds_total")
         prompt = parsed.get("llamacpp:prompt_tokens_total")
         prompt_sec = parsed.get("llamacpp:prompt_seconds_total")
 
-        # Subtract backend's own probe tokens so an idle server that only received a
-        # probe shows 0 tok/s instead of a fake decode rate.
-        import time as _t
+        # llama.cpp 自带的速率 gauge（首选数据源）
+        gauge_pred = parsed.get("llamacpp:predicted_tokens_seconds")
+        gauge_prompt = parsed.get("llamacpp:prompt_tokens_seconds")
+
+        # 扣掉后端自身探测请求产生的 token，避免空闲服务被探测“刷”出速率
         _now = _t.time()
         rec = StatsService._PROBE_TOKENS.get(port)
         _in = bool(rec and prev and prev.get("ts", 0) < rec["ts"] <= _now)
         _probe_pred = rec.get("pred", 0) if _in else 0
         _probe_prompt = rec.get("prompt", 0) if _in else 0
 
+        # ── 解码速率 ──
         tok_s = 0.0
-        if prev and "pred" in prev and "pred_sec" in prev and pred is not None and pred_sec is not None:
+        if gauge_pred and gauge_pred > 0:
+            tok_s = float(gauge_pred)
+        elif prev and "pred" in prev and "pred_sec" in prev and pred is not None and pred_sec is not None:
             dp = pred - prev["pred"] - _probe_pred
             ds = pred_sec - prev["pred_sec"]
             if dp > 0 and ds > 0:
                 tok_s = dp / ds
-        entry["tok_s"] = tok_s
 
+        # ── 预填充速率 ──
         prompt_tok_s = 0.0
-        if prev and "prompt" in prev and "prompt_sec" in prev and prompt is not None and prompt_sec is not None:
+        if gauge_prompt and gauge_prompt > 0:
+            prompt_tok_s = float(gauge_prompt)
+        elif prev and "prompt" in prev and "prompt_sec" in prev and prompt is not None and prompt_sec is not None:
             dp = prompt - prev["prompt"] - _probe_prompt
             ds = prompt_sec - prev["prompt_sec"]
             if dp > 0 and ds > 0:
                 prompt_tok_s = dp / ds
-        entry["prompt_tok_s"] = prompt_tok_s
 
+        # ── sticky 回退：空闲窗口保留最近一次有效观测 ──
+        tok_s = StatsService._sticky_rate(port, "tok_s", tok_s)
+        prompt_tok_s = StatsService._sticky_rate(port, "prompt_tok_s", prompt_tok_s)
+
+        entry["tok_s"] = tok_s
+        entry["prompt_tok_s"] = prompt_tok_s
         entry["total_prompt_tokens"] = prompt
         entry["total_predicted_tokens"] = pred
 
-        # Peak comes from both per-request timings (probe) and real /metrics
-        # windows. The probe's tiny prompt gives a low prefill peak, so we also
-        # feed the live metrics-window rate into the rolling 60s max. This makes
-        # the dashboard "prefill peak" track actual observed prefill bursts.
         peak_tok, peak_prompt = StatsService._record_peak(port, tok_s, prompt_tok_s)
         entry["tok_s_peak"] = peak_tok
         entry["prompt_tok_s_peak"] = peak_prompt
@@ -636,20 +759,60 @@ class StatsService:
         }
 
     @classmethod
+    def _sticky_rate(cls, port: int, key: str, value):
+        """速率 sticky：本轮有值就记录并返回；本轮为 0（空闲）则返回上次有效值。
+
+        持久化到 /tmp 的峰值文件，因此 uvicorn --reload 重启进程后仍然保留。
+        """
+        try:
+            store = cls._load_peak_store()
+            p = store.setdefault(str(port), {})
+            k = "cur_" + key
+            if value and value > 0:
+                p[k] = float(value)
+                cls._save_peak_store(store)
+                return float(value)
+            return float(p.get(k) or 0.0)
+        except Exception:
+            return float(value or 0.0)
+
+    @classmethod
     def _record_peak(cls, port: int, tok_s, prompt_tok_s):
+        """滚动 300s 峰值。
+
+        与旧实现的关键差别：窗口内没有样本时**不再返回 None**，而是回退到持久化的
+        last-known 峰值。旧行为会让前端 v-if="prompt_tok_s_peak != null" 判空，
+        把整块“预填充”文字隐藏 —— 这正是“一会有一会没有”的直接原因。
+        """
         import time as _t
         now = _t.time()
         store = cls._load_peak_store()
         p = store.setdefault(str(port), {"tok_s": [], "prompt_tok_s": []})
+
         if tok_s and tok_s > 0:
             p.setdefault("tok_s", []).append([now, tok_s])
+            p["last_tok_s"] = [now, float(tok_s)]
         if prompt_tok_s and prompt_tok_s > 0:
             p.setdefault("prompt_tok_s", []).append([now, prompt_tok_s])
-        p["tok_s"] = [[ts, v] for ts, v in p.get("tok_s", []) if ts > now - 60]
-        p["prompt_tok_s"] = [[ts, v] for ts, v in p.get("prompt_tok_s", []) if ts > now - 60]
-        cls._save_peak_store(store)
+            p["last_prompt_tok_s"] = [now, float(prompt_tok_s)]
+
+        p["tok_s"] = [[ts, v] for ts, v in p.get("tok_s", []) if ts > now - 300]
+        p["prompt_tok_s"] = [[ts, v] for ts, v in p.get("prompt_tok_s", []) if ts > now - 300]
+
         peak_tok = max((v for _, v in p["tok_s"]), default=None)
         peak_prompt = max((v for _, v in p["prompt_tok_s"]), default=None)
+
+        # 窗口过期 -> 回退到最近一次观测到的峰值，保证长期可见
+        if peak_tok is None:
+            _lt = p.get("last_tok_s")
+            if _lt and _lt[1] > 0:
+                peak_tok = _lt[1]
+        if peak_prompt is None:
+            _lp = p.get("last_prompt_tok_s")
+            if _lp and _lp[1] > 0:
+                peak_prompt = _lp[1]
+
+        cls._save_peak_store(store)
         return peak_tok, peak_prompt
 
     @classmethod
@@ -676,7 +839,7 @@ class StatsService:
 
         def _counter(name):
             try:
-                txt = self._http_get_text(f"http://127.0.0.1:{port}/metrics", timeout=2)
+                txt = self._http_get_text(f"http://127.0.0.1:{port}/metrics", timeout=8)
                 return self._parse_llamacpp_metrics(txt).get(name)
             except Exception:
                 return None
@@ -689,6 +852,7 @@ class StatsService:
             "temperature": 0,
             "cache_prompt": True,
         }).encode("utf-8")
+        _t0 = _time.time()
         req = urllib.request.Request(
             f"http://127.0.0.1:{port}/completion",
             data=payload,
@@ -697,6 +861,7 @@ class StatsService:
         )
         with urllib.request.urlopen(req, timeout=25) as r:
             d = _json.loads(r.read().decode("utf-8", "replace"))
+        _elapsed = _time.time() - _t0
         post_pred = _counter("llamacpp:tokens_predicted_total")
         post_prompt = _counter("llamacpp:prompt_tokens_total")
         _pred_delta = (post_pred - pre_pred) if (pre_pred is not None and post_pred is not None) else 0
@@ -705,6 +870,8 @@ class StatsService:
             _pred_delta = 0
         if _prompt_delta < 0:
             _prompt_delta = 0
+        _probe_tok_s = (_pred_delta / _elapsed) if (_elapsed > 0 and _pred_delta > 0) else 0.0
+        _probe_prompt_tok_s = (_prompt_delta / _elapsed) if (_elapsed > 0 and _prompt_delta > 0) else 0.0
         StatsService._PROBE_TOKENS[port] = {
             "ts": _time.time(), "pred": int(_pred_delta), "prompt": int(_prompt_delta)
         }
@@ -719,9 +886,15 @@ class StatsService:
                 "drafted": draft_n,
                 "accepted": draft_accepted,
             }
+        _tn = t.get("predicted_n"); _tms = t.get("predicted_ms")
+        _pn = t.get("prompt_n"); _pms = t.get("prompt_ms")
+        _ts_timing = (_tn / (_tms / 1000.0)) if (_tn and _tms and _tms > 0) else 0.0
+        _pts_timing = (_pn / (_pms / 1000.0)) if (_pn and _pms and _pms > 0) else 0.0
+        _final_tok_s = _ts_timing if _ts_timing > 0 else _probe_tok_s
+        _final_prompt_tok_s = _pts_timing if _pts_timing > 0 else _probe_prompt_tok_s
         return {
-            "tok_s": t.get("predicted_per_second"),
-            "prompt_tok_s": t.get("prompt_per_second"),
+            "tok_s": _final_tok_s,
+            "prompt_tok_s": _final_prompt_tok_s,
             "mtp": mtp,
         }
 
@@ -787,17 +960,20 @@ class StatsService:
                     "kv_cache_total": None,
                     "mtp": {"enabled": False, "acceptance": None,
                             "drafted": None, "accepted": None},
+                    "spec": {"enabled": False, "kind": None, "label": None,
+                             "n_max": None, "draft_model": None},
                     "source": None,
                     "alive": True,
                     "error": None,
                 }
 
-                # Reuse recently sampled MTP so the card doesn't flicker
-                # between probes (each request builds a fresh entry).
-                _now = time.time()
-                _cached = StatsService._MTP_CACHE.get(port)
-                if _cached and (_now - _cached["ts"]) < 60:
-                    entry["mtp"] = _cached["mtp"]
+                # 投机解码类型：命令行是权威来源（MTP / DSpark / 草稿模型）
+                try:
+                    _sp = _detect_spec(cmd)
+                    entry["spec"] = _sp
+                    entry["mtp"]["enabled"] = _sp["enabled"]
+                except Exception:
+                    pass
 
                 try:
                     mi = proc.memory_info()
@@ -810,19 +986,26 @@ class StatsService:
                     models = (m or {}).get("models") or []
                     if models:
                         entry["model_path"] = models[0].get("model") or models[0].get("name")
-                        entry["model"] = (entry["model_path"] or "").rsplit("/", 1)[-1]
+                        # 优先用启动时 -a/--alias 指定的别名（若有），否则从文件名清洗模型名
+                        alias = None
+                        for i, a in enumerate(cmd):
+                            if a in ("-a", "--alias") and i + 1 < len(cmd):
+                                alias = cmd[i + 1]
+                            elif a.startswith("--alias="):
+                                alias = a.split("=", 1)[1]
+                        entry["model"] = _display_model_name(alias, entry["model_path"])
                 except Exception:
                     for i, a in enumerate(cmd):
                         if a in ("--model", "-m") and i + 1 < len(cmd):
                             entry["model_path"] = cmd[i + 1]
-                            entry["model"] = cmd[i + 1].rsplit("/", 1)[-1]
+                            entry["model"] = _clean_model_name(cmd[i + 1])
                         elif a.startswith("--model="):
                             entry["model_path"] = a.split("=", 1)[1]
-                            entry["model"] = entry["model_path"].rsplit("/", 1)[-1]
+                            entry["model"] = _clean_model_name(entry["model_path"])
 
                 metrics_text = None
                 try:
-                    metrics_text = self._http_get_text(f"http://127.0.0.1:{port}/metrics", timeout=2)
+                    metrics_text = self._http_get_text(f"http://127.0.0.1:{port}/metrics", timeout=8)
                 except Exception:
                     metrics_text = None
 
@@ -830,56 +1013,70 @@ class StatsService:
                     parsed = self._parse_llamacpp_metrics(metrics_text)
                     self._apply_parsed_metrics(entry, parsed, port)
                     entry["source"] = "metrics"
-                    # The true peak decode rate comes from per-request timings
-                    # (predicted_per_second), not the bursty cumulative counter. Fire
-                    # one throttled probe (~10s) that also refreshes MTP acceptance;
-                    # its timings give the genuine peak within the rolling minute.
-                    # Probe tokens are subtracted from the counter rate, so idle still
-                    # shows 0 current tok/s while the peak reflects the real speed.
-                    _now = time.time()
-                    if _now - StatsService._RATE_PROBE_TS.get(port, 0) > 10:
-                        try:
-                            _pr = self._probe_server(port)
-                            if _pr.get("mtp", {}).get("enabled"):
-                                entry["mtp"] = _pr["mtp"]
-                                StatsService._MTP_CACHE[port] = {"ts": _now, "mtp": _pr["mtp"]}
-                            pk_tok, pk_prompt = StatsService._record_peak(
-                                port, _pr.get("tok_s"), _pr.get("prompt_tok_s")
-                            )
-                            entry["tok_s_peak"] = pk_tok
-                            entry["prompt_tok_s_peak"] = pk_prompt
-                            StatsService._RATE_PROBE_TS[port] = _now
-                            StatsService._MTP_PROBE_TS[port] = _now
-                        except Exception as _e:
-                            StatsService._RATE_PROBE_TS[port] = _now - 7
-                            StatsService._MTP_PROBE_TS[port] = _now - 50
-                            print(f"[model-metrics] rate probe failed port {port}: {_e!r}", flush=True)
+                    # MTP acceptance is sampled ONCE per server lifecycle (see the
+                    # unified block below) — no periodic probe here. The live tok/s
+                    # + rolling peak above come purely from real /metrics traffic, so
+                    # an idle server correctly reads 0 and the peak reflects genuine
+                    # bursts only.
                 else:
+                    # No /metrics endpoint: mark probe-only. The one-time MTP probe
+                    # (unified block below) seeds tok_s_peak + mtp on first
+                    # discovery; we do NOT poll this server on a timer.
+                    entry["source"] = "probe"
+                    # best-effort cumulative totals even in probe-only mode
                     try:
-                        pr = self._probe_server(port)
-                        entry["tok_s"] = pr.get("tok_s")
-                        entry["prompt_tok_s"] = pr.get("prompt_tok_s")
+                        _mt = self._parse_llamacpp_metrics(
+                            self._http_get_text(f"http://127.0.0.1:{port}/metrics", timeout=8)
+                        )
+                        entry["total_predicted_tokens"] = _mt.get("llamacpp:tokens_predicted_total")
+                        entry["total_prompt_tokens"] = _mt.get("llamacpp:prompt_tokens_total")
+                    except Exception:
+                        pass
+
+                # ── MTP acceptance: probe ONCE per server lifecycle ──
+                # /metrics on this llama.cpp build does not expose MTP drafted/
+                # accepted counters, so we determine MTP on/off with a single short
+                # probe. It fires exactly once when the model server is first
+                # discovered, and again only after a restart (detected via PID
+                # change). No periodic re-probing — we never disturb a running
+                # server again, so the dashboard simply shows MTP on or off.
+                _mt_cache = StatsService._MTP_CACHE.get(port)
+                if entry.get("source") == "metrics":
+                    # 投机类型已由命令行权威判定，速率由 /metrics 被动获取 ——
+                    # 无需再发探测请求。繁忙服务上探测必排队超时（曾致接口 20~26s
+                    # 且恒误判「MTP 关」），同时也会打扰正在服务的模型。
+                    pass
+                elif not (_mt_cache and _mt_cache.get("pid") == pid and "mtp" in _mt_cache):
+                    try:
+                        _pr = self._probe_server(port)
+                        _pm = _pr.get("mtp") or {}
+                        # 只补接受率明细，enabled 一律以命令行为准
+                        if _pm.get("drafted"):
+                            entry["mtp"]["acceptance"] = _pm.get("acceptance")
+                            entry["mtp"]["drafted"] = _pm.get("drafted")
+                            entry["mtp"]["accepted"] = _pm.get("accepted")
+                        if not entry.get("tok_s"):
+                            entry["tok_s"] = _pr.get("tok_s") or 0.0
+                        if not entry.get("prompt_tok_s"):
+                            entry["prompt_tok_s"] = _pr.get("prompt_tok_s") or 0.0
                         pk_tok, pk_prompt = StatsService._record_peak(
-                            port, pr.get("tok_s"), pr.get("prompt_tok_s")
+                            port, _pr.get("tok_s"), _pr.get("prompt_tok_s")
                         )
                         entry["tok_s_peak"] = pk_tok
                         entry["prompt_tok_s_peak"] = pk_prompt
-                        if pr.get("mtp", {}).get("enabled"):
-                            entry["mtp"] = pr["mtp"]
-                            StatsService._MTP_CACHE[port] = {"ts": _now, "mtp": pr["mtp"]}
-                        entry["source"] = "probe"
-                        # best-effort cumulative totals even in probe-only mode
-                        try:
-                            _mt = self._parse_llamacpp_metrics(
-                                self._http_get_text(f"http://127.0.0.1:{port}/metrics", timeout=2)
-                            )
-                            entry["total_predicted_tokens"] = _mt.get("llamacpp:tokens_predicted_total")
-                            entry["total_prompt_tokens"] = _mt.get("llamacpp:prompt_tokens_total")
-                        except Exception:
-                            pass
-                    except Exception as e:
-                        entry["error"] = f"probe failed: {e}"
-                        entry["alive"] = False
+                        StatsService._MTP_CACHE[port] = {
+                            "ts": time.time(), "mtp": dict(entry["mtp"]), "pid": pid,
+                        }
+                    except Exception as _e:
+                        print(f"[model-metrics] MTP probe failed port {port}: {_e!r}", flush=True)
+                        StatsService._MTP_CACHE[port] = {
+                            "ts": time.time(), "mtp": entry["mtp"], "pid": pid,
+                        }
+                else:
+                    _cm = _mt_cache.get("mtp") or {}
+                    for _k in ("acceptance", "drafted", "accepted"):
+                        if _cm.get(_k) is not None:
+                            entry["mtp"][_k] = _cm[_k]
 
                 servers.append(entry)
         except Exception as e:
