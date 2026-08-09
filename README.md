@@ -2,14 +2,14 @@
 
 > Brew your local AI, sip by sip.
 
-Life2Tea is a **local LLM plugin architecture system** for desktop devices.  
-It enables intelligent plugin-based collaboration between language models and multimodal models running locally on your device.
+Life2Tea is a **local LLM unified model gateway** for desktop devices.  
+It aggregates multiple local inference backends (llama.cpp / vLLM / SGLang) behind a single OpenAI-compatible API, with task-based routing, fallback chains, resource-aware scheduling, and a monitoring dashboard.
 
 ## ✨ Vision
 
-- **Plugin Interface Protocol (PIP)**: A unified interface for model and expert plugins
-- **MoE-inspired Routing**: System-level Mixture-of-Experts调度 across local models
-- **Resource-aware Scheduling**: Local GPU/VRAM budget management
+- **Unified Model Gateway**: One OpenAI-compatible entry aggregating multiple local backends
+- **MoE-inspired Routing**: System-level Mixture-of-Experts scheduling across local endpoints
+- **Resource-aware Scheduling**: Local GPU/VRAM budget management + LRU eviction
 - **Multi-end Support**: Desktop (Tauri), embedded, and multi-device sync
 
 ## 🎯 Current Features
@@ -22,15 +22,14 @@ It enables intelligent plugin-based collaboration between language models and mu
 - 密码安全哈希 (SHA256 + salt)
 - 自动登录和登出
 
-#### 2. **模型管理**
-- 模型扫描和发现
-- 模型加载/卸载控制
-- **模型特定配置**:
-  - GPU层数、上下文大小、线程数、批次大小
-  - Flash Attention、连续批处理
-  - KV 缓存类型 (F16/F32/Q4_0/Q8_0)
-  - **MTP 加速配置**: 多令牌预测参数
-  - 预设配置 (轻量级/平衡型/高性能)
+#### 2. **统一模型网关**
+- **OpenAI 兼容统一 API**: `/v1/chat/completions`、`/v1/completions`、`/v1/models`
+- **多后端聚合**: llama.cpp (llama-server) / vLLM / SGLang，均走 OpenAI 兼容 HTTP
+- **Provider 管理**: 端点声明（host/port/model/params）+ 启停 + 健康
+- **任务路由 + 失败回退链**: 代码/视觉/数学/聊天分类 → 候选端点链，首选失败自动切换
+- **资源预算**: VRAM/RAM 预算、LRU 逐出
+- **统一流式 (SSE)**: keep-alive 心跳 + 统一错误块
+- **真实 token 计量**: 写入 `token_usage`，接通 `MetricsCollector`
 
 #### 3. **API 密钥管理**
 - CRUD 操作
@@ -46,10 +45,10 @@ It enables intelligent plugin-based collaboration between language models and mu
   - 配置文件 (.json, .yaml, .toml)
 - 颜色编码标识
 
-#### 5. **插件系统**
-- 插件扫描和加载
-- 插件生命周期管理
-- 插件配置持久化
+#### 5. **模型网关管理界面** (Models/Providers 视图)
+- 端点列表（provider 类型/端口/状态）
+- 加载/卸载、参数配置（键值编辑器，映射各后端 CLI 参数）
+- 配置持久化到 `config/gateway.json`
 
 #### 6. **国际化支持**
 - 中文/英文切换
@@ -113,7 +112,7 @@ It enables intelligent plugin-based collaboration between language models and mu
 - [ ] 多设备同步
 - [ ] 第三方监控集成 (Prometheus/Grafana)
 - [ ] 云部署支持
-- [ ] 高级插件开发工具
+- [ ] 更多 Provider 后端（Ollama/云端 API）
 - [ ] 性能优化和缓存策略
 
 ## 📁 Project Structure
@@ -122,70 +121,71 @@ It enables intelligent plugin-based collaboration between language models and mu
 life2tea/
 ├── backend/          # Python FastAPI backend
 │   └── app/         # Modular FastAPI application
-│       ├── core/      # Config, Logger, Metrics
-│       │   ├── config_manager.py    # Configuration management
-│       │   ├── user_service.py      # User authentication
-│       │   ├── api_keys_middleware.py # API key auth middleware
-│       │   ├── stats_middleware.py  # Stats collection middleware 🆕
-│       │   ├── log_middleware.py    # Log management middleware 🆕
-│       │   └── stats_service.py     # Stats service 🆕
-│       ├── plugins/   # Plugin lifecycle & model registry
-│       ├── experts/   # Expert handlers (chat, tools, ...)
+│       ├── core/      # Config, Logger, Metrics, Stats
+│       ├── gateway/   # Unified Model Gateway 🆕
+│       │   ├── providers/  # Provider abstraction (llamacpp/vllm/sglang)
+│       │   ├── manager.py  # ProviderManager (lifecycle/VRAM/ports)
+│       │   ├── router.py   # GatewayRouter (task routing + fallback)
+│       │   └── router_api.py  # OpenAI-compatible /v1 API
 │       ├── routers/   # API route modules
 │       │   ├── auth_router.py       # Authentication endpoints
 │       │   ├── config_router.py     # Configuration endpoints
-│       │   ├── model_router.py      # Model management endpoints
-│       │   ├── plugin_router.py     # Plugin endpoints
-│       │   ├── api_key_router.py    # API key endpoints
+│       │   ├── models_router.py     # Model endpoint management
+│       │   ├── chat_router.py       # Chat endpoints (gateway-backed)
+│       │   ├── api_keys_router.py   # API key endpoints
 │       │   └── stats_router.py      # Stats and monitoring endpoints 🆕
 │       └── main.py                # Application entry point
 ├── frontend/         # Vue 3 + TypeScript + Vite
 │   └── src/
 │       ├── views/           # Page components
 │       │   ├── ChatView.vue
-│       │   ├── ModelsView.vue
+│       │   ├── ModelsView.vue      # Model Gateway / Providers
 │       │   ├── SettingsView.vue
-│       │   ├── PluginsView.vue
 │       │   ├── ApiKeysView.vue
 │       │   └── DashboardView.vue      # System monitoring dashboard 🆕
-│       ├── components/      # Reusable components
-│       │   ├── DirectoryBrowser.vue    # Directory browser
-│       │   ├── PathPickerModal.vue     # Path picker modal
-│       │   ├── Gauge.vue               # Gauge components
-│       │   ├── LineChart.vue           # Line chart component
-│       │   └── LogViewer.vue           # Log viewer component
-│       ├── i18n/            # Internationalization
-│       ├── router.ts        # Vue Router configuration
-│       ├── auth.ts          # Authentication service
-│       └── App.vue          # Main application component
-├── electron/         # Electron desktop shell (TBD)
-├── plugins/          # Plugin directory
-│   ├── models/      # Model plugins
-│   └── experts/     # Expert/tool plugins
-├── schema/          # PIP protocol schemas (JSON Schema)
-├── docs/            # Documentation
-├── rfcs/           # RFC design docs
+│       ├── api/           # API client modules 🆕
+│       ├── stores/        # Pinia stores (gateway) 🆕
+│       ├── types/         # Shared TS types 🆕
+│       ├── components/    # Reusable components
+│       ├── i18n/          # Internationalization
+│       ├── router.ts      # Vue Router configuration
+│       └── App.vue        # Main application component
+├── schema/          # JSON Schemas
+├── docs/            # Documentation (gateway-refactor-design.md)
+├── rfcs/           # RFC design docs (003-unified-gateway)
 └── config/          # Configuration files
-    └── life2tea.json  # Main configuration file
+    ├── life2tea.json     # Global paths/env
+    └── gateway.json      # Model gateway config (providers/routing) 🆕
 ```
 
 ## ⚙️ Configuration
 
-Ports and paths are managed in `config/life2tea.json` (the single source of truth for global config). `config/life2tea.json` is git-ignored because it holds local paths; copy the template to create it:
+- **`config/life2tea.json`**: global paths/env (`models_dir`, `llama_server_exe`, ports). Git-ignored; copy from `config/life2tea.example.json`.
+- **`config/gateway.json`** 🆕: the **model gateway config** — `providers`, `routing` rules, `resource_budget`. Git-ignored; template at `config/gateway.example.json`.
 
 ```bash
 cp config/life2tea.example.json config/life2tea.json
+cp config/gateway.example.json config/gateway.json
 ```
 
-Then edit `models_dir`, `llama_backend_dir`, and ports as needed:
+A gateway provider entry:
 
 ```json
 {
-  "backend_port": 3003,
-  "frontend_port": 5005,
-  "default_host": "127.0.0.1"
+  "providers": {
+    "lfm2": {
+      "provider": "llamacpp",
+      "model_path": "${MODELS_DIR}/lfm2.gguf",
+      "host": "127.0.0.1",
+      "port": 8082,
+      "params": { "ctx_size": 32768, "n_gpu_layers": 99 }
+    },
+    "qwen3.6": { "provider": "vllm", "model_name": "Qwen/Qwen3-6B", "port": 8083 }
+  }
 }
 ```
+
+DB path is resolved from `LIFE2TEA_DB` / `DATABASE_URL` env, else `config/life2tea.db`.
 
 Frontend proxy target is in `frontend/.env.development`:
 ```
@@ -217,23 +217,22 @@ npm run dev
 # Vite dev server at http://localhost:5005
 ```
 
-## 🔌 Plugin Interface Protocol (PIP)
+## 🔌 Unified Model Gateway (OpenAI 兼容)
 
-See `schema/plugin-manifest.json` for the full plugin manifest schema.
+External applications call the gateway as a standard OpenAI-compatible API:
 
-A plugin is a directory with a `manifest.json`:
-
-```json
-{
-  "name": "llama-cpp",
-  "version": "1.0.0",
-  "type": "model",
-  "entry": "server.py",
-  "description": "llama.cpp backend plugin",
-  "capabilities": ["chat", "completion"],
-  "resource": { "vram_mb": 4096 }
-}
 ```
+POST /v1/chat/completions   # 聊天补全（SSE 流式或 JSON）
+POST /v1/completions        # 文本补全
+GET  /v1/models             # 列出已配置端点
+POST /v1/models/{name}/load | /v1/models/{name}/unload
+GET  /v1/models/{name}      # 端点详情
+GET  /health                # 网关健康
+```
+
+网关根据 `model` 字段或消息内容做任务路由，并按候选链失败回退。鉴权中间件默认关闭（按需启用）。
+
+详见 `docs/gateway-refactor-design.md` 与 `rfcs/003-unified-gateway.md`。
 
 ## 📖 API Endpoints
 
@@ -278,12 +277,21 @@ A plugin is a directory with a `manifest.json`:
 | `GET /api/stats/model-metrics` | GET | 模型运行指标 / Token 实时统计（按端口） 🆕 |
 | `GET /api/logs` | GET | Get system logs |
 
-### System
+### Gateway (OpenAI 兼容)
 | Endpoint | Method | Description |
 |----------|--------|-------------|
+| `POST /v1/chat/completions` | POST | Chat completion (SSE/JSON) |
+| `POST /v1/completions` | POST | Text completion |
+| `GET /v1/models` | GET | List endpoints |
+| `POST /v1/models/{name}/load` | POST | Load endpoint |
+| `POST /v1/models/{name}/unload` | POST | Unload endpoint |
 | `GET /health` | GET | Health check |
+
+### Chat (内部)
+| Endpoint | Method | Description |
+|----------|--------|-------------|
 | `POST /api/chat/completions` | POST | Chat completion (SSE) |
-| `GET /api/plugins` | GET | List all plugins |
+| `PUT /api/chat/conversation/{id}` | PUT | Update conversation title/model |
 
 ## 🛠️ Tech Stack
 
@@ -307,11 +315,11 @@ A plugin is a directory with a `manifest.json`:
 - **Tauri**: Cross-platform desktop app
 - **Electron**: Legacy support
 
-### Models & Plugins
-- **llama.cpp**: Primary backend
-- **Ollama**: Alternative backend
-- **vLLM**: High-performance option
-- **PIP**: Plugin Interface Protocol
+### Models & Gateway
+- **llama.cpp (llama-server)**: Local GGUF backend
+- **vLLM**: High-performance OpenAI-compatible backend
+- **SGLang**: Alternative high-performance backend
+- **Unified Gateway**: Provider abstraction + routing + fallback + VRAM budget
 
 ## 📄 License
 
@@ -319,16 +327,16 @@ MIT License — see LICENSE file.
 
 ## 🤝 Contributing
 
-RFC docs are in `rfcs/`. Plugin development guide coming soon.
+RFC docs are in `rfcs/` (see `003-unified-gateway.md`). Provider development guide coming soon.
 
 ## 📊 Development Status
 
-### Current Version: v0.1.0
-- ✅ User authentication system
-- ✅ Model management with specific configurations
+### Current Version: v0.2.0
+- ✅ Unified Model Gateway (Provider abstraction / routing / fallback / /v1 API)
+- ✅ User authentication system (disabled by default)
+- ✅ Model gateway management UI (Models/Providers view)
 - ✅ API key management
 - ✅ Path picker with cross-platform support
-- ✅ Plugin system
 - ✅ Internationalization (zh-CN/en)
 - 🆕 System monitoring dashboard
 - 🆕 Log management system
@@ -341,7 +349,7 @@ RFC docs are in `rfcs/`. Plugin development guide coming soon.
 - [ ] Multi-device sync
 - [ ] Prometheus/Grafana integration
 - [ ] Cloud deployment support
-- [ ] Advanced plugin development tools
+- [ ] More Provider backends (Ollama / cloud APIs)
 
 ---
 
