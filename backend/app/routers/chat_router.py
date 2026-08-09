@@ -21,8 +21,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 
-from ..experts.chat_handler import ChatHandler
-from ..core.routing import SystemRouter
+from ..gateway.providers.base import EndpointStatus, GatewayError, Provider
 
 
 router = APIRouter()
@@ -63,207 +62,148 @@ class MessageBody(BaseModel):
     content: str
 
 
-def _get_router(request: Request) -> SystemRouter:
-    """Get SystemRouter instance from app.state."""
-    return request.app.state.system_router
+def _get_gateway(request: Request):
+    """Get the shared gateway (manager + router) from app.state."""
+    return request.app.state.gateway
 
 
-def _get_running_plugins(request: Request) -> list:
-    """Get list of running model plugin names."""
-    state = request.app.state
-    lifecycle_mgr = state.lifecycle_mgr
-    instances = lifecycle_mgr.list_instances()
-    return [inst["plugin_name"] for inst in instances if inst["status"] == "running"]
-
-
-def _get_host_port_for_plugin(request: Request, plugin_name: str) -> tuple:
-    """Find host:port for a running plugin."""
-    state = request.app.state
-    lifecycle_mgr = state.lifecycle_mgr
-    instances = lifecycle_mgr.list_instances()
-    for inst in instances:
-        if inst["plugin_name"] == plugin_name and inst["status"] == "running":
-            return inst["host"], inst["port"]
-    # Plugin not running — return defaults
-    return "127.0.0.1", 8080
-
-
-def _get_handler(request: Request, messages: List[Dict[str, str]], model_pref: Optional[str] = None) -> ChatHandler:
-    """Get ChatHandler, using SystemRouter to select the best model plugin."""
-    state = request.app.state
-    router = _get_router(request)
-
-    # Use router to select model
-    running = _get_running_plugins(request)
-    selected_plugin, _, _ = router.select_model(
-        messages=messages,
-        model_preference=model_pref,
-        running_plugins=running,
-    )
-
-    host, port = _get_host_port_for_plugin(request, selected_plugin)
-
-    # Check if handler needs update
-    if (
-        not hasattr(state, "chat_handler")
-        or state.chat_handler is None
-        or state.chat_handler._host != host
-        or state.chat_handler._port != port
-    ):
-        state.chat_handler = ChatHandler(host=host, port=port)
-
-    return state.chat_handler
+async def _get_endpoint(request: Request, messages: List[Dict[str, str]], model_pref: Optional[str] = None):
+    """Route to an endpoint via the GatewayRouter; auto-start if stopped."""
+    gateway = _get_gateway(request)
+    endpoint = gateway.router.select(messages=messages, model_preference=model_pref)
+    if not endpoint:
+        raise HTTPException(status_code=503, detail="No model endpoints configured")
+    if endpoint.status != EndpointStatus.RUNNING:
+        try:
+            endpoint = await gateway.manager.start(endpoint.name)
+        except GatewayError as e:
+            raise HTTPException(status_code=503, detail=e.message)
+    return endpoint
 
 
 @router.post("/completions", summary="OpenAI-style chat completions")
 async def chat_completions(body: ChatCompletionBody, request: Request):
     messages = [m.dict() for m in body.messages]
-    handler = _get_handler(request, messages, model_pref=body.model)
+    gateway = _get_gateway(request)
 
-    # Log generation start
-    if hasattr(request.app.state, "logging_service"):
-        from ..core.logging_service import get_logging_service
-        logging_service = get_logging_service()
+    params = {
+        "max_tokens": body.max_tokens,
+        "temperature": body.temperature,
+        "top_p": body.top_p,
+        "top_k": body.top_k,
+        "repeat_penalty": body.repeat_penalty,
+    }
+    if body.stop:
+        params["stop"] = body.stop
 
-        # Try to get user_id from request state or use default
-        current_user = getattr(request.state, "current_user", None)
-        user_id = current_user.id if current_user else "anonymous"
-
-        session_id = getattr(request.state, "session_id", None)
-        if not session_id:
-            session_id = "anonymous"
-
-        # Get conversation_id from messages or create one
-        conversation_id = getattr(request.state, "conversation_id", None)
-        if not conversation_id:
-            # Try to get from last user message or create new
-            for msg in reversed(messages):
-                if msg["role"] == "user":
-                    conversation_id = getattr(request.state, "conversation_id", None)
-                    break
-            if not conversation_id:
-                from datetime import datetime
-                conv_id = str(uuid.uuid4())
-                conversation_id = conv_id
-
-        # Log generation start
-        log = logging_service.log_generation(
-            user_id=user_id,
-            conversation_id=conversation_id,
-            session_id=session_id,
-            model_name=body.model or "unknown",
-            provider="llama.cpp",
-            temperature=body.temperature,
-            top_p=body.top_p,
-            max_tokens=body.max_tokens,
-            retry_count=0,
-        )
-        request.state.generation_log_id = log.id
+    # Build fallback chain via the gateway router
+    chain = gateway.router.route_chain(messages=messages, model_preference=body.model)
 
     if body.stream:
-        async def gen():
-            start_time = time.time()
+        return StreamingResponse(
+            _stream_gen(request, gateway, chain, messages, params),
+            media_type="text/event-stream",
+        )
 
-            # Log streaming start
-            if hasattr(request.state, "generation_log_id"):
-                from ..core.logging_service import get_logging_service
-                logging_service = get_logging_service()
-                try:
-                    logging_service.update_generation(
-                        log_id=request.state.generation_log_id,
-                        prompt_tokens=len(messages),  # Approximate
-                    )
-                except:
-                    pass
-
-            async for chunk in handler.chat_completion_stream(
-                messages=messages,
-                max_tokens=body.max_tokens,
-                temperature=body.temperature,
-                top_p=body.top_p,
-                top_k=body.top_k,
-                repeat_penalty=body.repeat_penalty,
-                stop=body.stop,
-            ):
-                yield chunk
-
-            # Log streaming completion
-            if hasattr(request.state, "generation_log_id"):
-                from ..core.logging_service import get_logging_service
-                logging_service = get_logging_service()
-                try:
-                    elapsed_ms = (time.time() - start_time) * 1000
-                    logging_service.update_generation(
-                        log_id=request.state.generation_log_id,
-                        generation_time_ms=elapsed_ms,
-                        completion_tokens=0,  # Will be counted from actual response
-                    )
-                except:
-                    pass
-        return StreamingResponse(gen(), media_type="text/event-stream")
-
-    start_time = time.time()
-    result = await handler.chat_completion(
-        messages=messages,
-        stream=False,
-        max_tokens=body.max_tokens,
-        temperature=body.temperature,
-        top_p=body.top_p,
-        top_k=body.top_k,
-        repeat_penalty=body.repeat_penalty,
-        stop=body.stop,
-    )
-    if "error" in result:
-        raise HTTPException(status_code=500, detail=result["error"])
-
-    # Log completion
-    if hasattr(request.app.state, "logging_service"):
-        from ..core.logging_service import get_logging_service
-        logging_service = get_logging_service()
+    last_error = None
+    for endpoint in chain:
+        endpoint.touch()
+        provider = Provider(endpoint)
         try:
-            elapsed_ms = (time.time() - start_time) * 1000
+            result = await provider.chat_completion(messages, stream=False, **params)
+            _log_generation(request, messages, body, result)
+            return result
+        except GatewayError as e:
+            last_error = e
+            continue
+    raise HTTPException(status_code=502, detail=last_error.message if last_error else "No model available")
 
-            # Estimate completion tokens from response length
-            completion_tokens = len(result.get("content", ""))
 
+async def _stream_gen(request, gateway, chain, messages, params):
+    last_error = None
+    for endpoint in chain:
+        endpoint.touch()
+        provider = Provider(endpoint)
+        try:
+            async for chunk in provider.chat_completion_stream(messages, **params):
+                yield chunk
+            yield "data: [DONE]\n\n"
+            _log_generation(request, messages, None, None)
+            return
+        except GatewayError as e:
+            last_error = e
+            continue
+    err = last_error
+    import json
+    yield f"data: {json.dumps({'error': {'message': err.message if err else 'No model available', 'type': err.error_type if err else 'unavailable'}})}\n\n"
+    yield "data: [DONE]\n\n"
+
+
+def _log_generation(request, messages, body, result):
+    """Persist generation log with real usage tokens (Phase 3 telemetry)."""
+    if not hasattr(request.app.state, "logging_service"):
+        return
+    from ..core.logging_service import get_logging_service
+
+    logging_service = get_logging_service()
+    try:
+        usage = (result or {}).get("usage") or {}
+        prompt_tokens = usage.get("prompt_tokens", len(messages))
+        completion_tokens = usage.get("completion_tokens", 0)
+        current_user = getattr(request.state, "current_user", None)
+        user_id = current_user.id if current_user else "anonymous"
+        conv_id = getattr(request.state, "conversation_id", "anonymous")
+        log = logging_service.log_generation(
+            user_id=user_id,
+            conversation_id=conv_id,
+            session_id=getattr(request.state, "session_id", "anonymous"),
+            model_name=body.model if body else "unknown",
+            provider="gateway",
+            temperature=body.temperature if body else 0.7,
+            top_p=body.top_p if body else 0.9,
+            max_tokens=body.max_tokens if body else 4096,
+            retry_count=0,
+        )
+        log_id = getattr(log, "id", None)
+        if log_id:
             logging_service.update_generation(
-                log_id=request.state.generation_log_id,
+                log_id=log_id,
+                prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
-                generation_time_ms=elapsed_ms,
             )
-        except:
-            pass
-
-    return result
+    except Exception:
+        pass
 
 
 @router.post("/completion", summary="Text completion")
 async def completion(body: CompletionBody, request: Request):
-    # Build a fake messages list for the router
     fake_messages = [{"role": "user", "content": body.prompt}]
-    handler = _get_handler(request, fake_messages)
-    result = await handler.completion(
-        prompt=body.prompt,
-        stream=body.stream,
-        max_tokens=body.max_tokens,
-        temperature=body.temperature,
-    )
-    if "error" in result:
-        raise HTTPException(status_code=500, detail=result["error"])
+    endpoint = await _get_endpoint(request, fake_messages)
+    provider = Provider(endpoint)
+    try:
+        result = await provider.completion(
+            prompt=body.prompt,
+            stream=body.stream,
+            max_tokens=body.max_tokens,
+            temperature=body.temperature,
+        )
+    except GatewayError as e:
+        raise HTTPException(status_code=502, detail=e.message)
     return result
 
 
 @router.get("/model-info", summary="Get loaded model info from running backend")
 async def get_model_info(request: Request):
-    # Use default chat messages for routing
-    handler = _get_handler(request, [{"role": "user", "content": "hi"}])
-    return await handler.get_model_info()
+    endpoint = await _get_endpoint(request, [{"role": "user", "content": "hi"}])
+    provider = Provider(endpoint)
+    return await provider.list_models()
 
 
 @router.get("/health", summary="Check if chat backend is reachable")
 async def chat_health(request: Request):
-    handler = _get_handler(request, [{"role": "user", "content": "hi"}])
-    return await handler.health_check()
+    endpoint = await _get_endpoint(request, [{"role": "user", "content": "hi"}])
+    provider = Provider(endpoint)
+    return await provider.health()
 
 
 @router.get("/conversations", summary="List all conversations")

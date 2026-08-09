@@ -31,6 +31,7 @@ log/
 *.log
 # life2tea.json holds local paths/ports — commit the .example template instead
 config/life2tea.json
+config/gateway.json
 config/plugin_*.json
 config/profiles/
 models/
@@ -40,3 +41,10 @@ backends/
 # OS
 Thumbs.db
 Desktop.ini
+
+# Windows NUL-device artifacts / stray scratch files
+nul
+backend/nul
+frontend/nul
+_workbuddy/
+.workbuddy/tmp/

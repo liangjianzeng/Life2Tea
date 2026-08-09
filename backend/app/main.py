@@ -202,6 +202,15 @@ async def lifespan(app: FastAPI):
             config_mgr=app.state.config_mgr,
             stats_service=app.state.stats_service,
         )
+
+        # ── Unified Model Gateway (provider-abstraction + router) ──
+        from app.gateway import ProviderManager
+        from app.gateway.router_api import init_gateway
+        app.state.provider_manager = ProviderManager(
+            config_path=os.path.join(config_dir, "gateway.json"),
+            config_mgr=app.state.config_mgr,
+        )
+        app.state.gateway = init_gateway(app.state.provider_manager)
     except Exception as e:
         print(f"[LIFECYCLE] Error during initialization: {e}", flush=True)
         raise
@@ -245,7 +254,7 @@ async def lifespan(app: FastAPI):
     from app.routers import chat_router, metrics_router, logs_router, routing_router
     from app.routers import auth_router, stats_router
     
-    from app.routers.proxy_service import proxy_router
+    from app.gateway.router_api import gateway_router
     from app.routers.log_router import router as log_router
     from app.routers.model_router_router import router as model_router_router
 
@@ -260,7 +269,7 @@ async def lifespan(app: FastAPI):
     app.include_router(auth_router, prefix="/api/auth", tags=["Auth"])
     app.include_router(stats_router.router)
     app.include_router(model_router_router, prefix="/api/model-router", tags=["ModelRouter"])
-    app.include_router(proxy_router)
+    app.include_router(gateway_router)
     print("[LIFECYCLE] Routers registered, total routes:", len(app.routes), flush=True)
     # Print all routes that have a path attribute
     for r in app.routes:
@@ -277,6 +286,13 @@ async def lifespan(app: FastAPI):
 
     # ── Shutdown ───────────────────────────────────────
     logger.info("system", "Life2Tea backend shutting down")
+    if hasattr(app.state, "provider_manager"):
+        import asyncio
+
+        try:
+            asyncio.get_event_loop().run_until_complete(app.state.provider_manager.stop_all())
+        except Exception:
+            pass
     app.state.lifecycle_mgr.stop_all()
     logger.info("system", "Life2Tea backend stopped")
 

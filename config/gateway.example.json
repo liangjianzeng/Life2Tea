@@ -1,0 +1,52 @@
+{
+  "providers": {
+    "lfm2": {
+      "provider": "llamacpp",
+      "model_path": "${MODELS_DIR}/lfm2.gguf",
+      "host": "127.0.0.1",
+      "port": 8082,
+      "params": {
+        "ctx_size": 32768,
+        "n_gpu_layers": 99,
+        "parallel": 2
+      }
+    },
+    "qwen3.6": {
+      "provider": "vllm",
+      "model_name": "Qwen/Qwen3-6B",
+      "host": "127.0.0.1",
+      "port": 8083,
+      "params": {
+        "max_model_len": 32768,
+        "gpu_memory_utilization": 0.85
+      }
+    },
+    "glm": {
+      "provider": "sglang",
+      "model_name": "glm-4-9b",
+      "host": "127.0.0.1",
+      "port": 8088,
+      "params": {
+        "max_model_len": 32768
+      }
+    }
+  },
+  "routing": {
+    "code": ["qwen3.6", "lfm2"],
+    "vision": ["glm"],
+    "ocr": ["glm"],
+    "math": ["lfm2"],
+    "chat": ["lfm2", "qwen3.6"],
+    "fast": ["lfm2"],
+    "default": ["lfm2"]
+  },
+  "resource_budget": {
+    "vram_mb": 0,
+    "ram_mb": 0,
+    "strategy": "evict_lru"
+  },
+  "default_port_range": [8080, 8099],
+  "default_host": "127.0.0.1",
+  "llama_server_exe": "",
+  "python": "python"
+}
