@@ -120,9 +120,19 @@ def get_db() -> Database:
 
 
 def init_db(config_dir: str) -> Database:
-    """Initialize the global database instance."""
+    """Initialize the global database instance.
+
+    Path resolution order: $LIFE2TEA_DB (or $DATABASE_URL sqlite:///...) →
+    config_dir/life2tea.db. Keeps a single DB source of truth across platforms.
+    """
     global _db
-    db_path = os.path.join(config_dir, "life2tea.db")
+    db_path = os.environ.get("LIFE2TEA_DB") or ""
+    if not db_path and os.environ.get("DATABASE_URL"):
+        url = os.environ["DATABASE_URL"]
+        if url.startswith("sqlite:///"):
+            db_path = url[len("sqlite:///"):]
+    if not db_path:
+        db_path = os.path.join(config_dir, "life2tea.db")
     _db = Database(db_path)
     return _db
 
