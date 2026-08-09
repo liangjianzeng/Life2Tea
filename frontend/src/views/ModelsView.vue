@@ -8,20 +8,19 @@
         </button>
       </div>
     </div>
-    <div v-if="models.length" class="models-list">
-      <div v-for="m in models" :key="m.family" class="model-card">
+    <div v-if="providers.length" class="models-list">
+      <div v-for="m in providers" :key="m.family" class="model-card">
         <div class="model-info">
           <strong class="model-name">{{ m.display }}</strong>
-          <span class="model-meta">{{ m.size_gb }} GB · {{ m.quantization }}</span>
-          <span v-if="m.instance" class="model-status running">
-            {{ t("models.running", { port: m.instance.port }) }}
+          <span class="model-meta">{{ m.provider }} · :{{ m.port }}</span>
+          <span v-if="m.status === 'running'" class="model-status running">
+            {{ t("models.running", { port: m.port }) }}
           </span>
           <span v-else class="model-status stopped">{{ t("models.stopped") }}</span>
-          <span v-if="m.disabled" class="model-disabled">已禁用</span>
         </div>
         <div class="model-actions">
           <button
-            v-if="!m.instance && !m.disabled"
+            v-if="m.status !== 'running'"
             @click="loadModel(m)"
             :disabled="loadingModel === m.family"
             class="btn-load"
@@ -29,15 +28,7 @@
             {{ loadingModel === m.family ? t("models.loading") : t("models.load") }}
           </button>
           <button
-            v-else-if="!m.instance && m.disabled"
-            @click="enableModel(m)"
-            :disabled="loadingModel === m.family"
-            class="btn-enable"
-          >
-            启用模型
-          </button>
-          <button
-            v-else-if="m.instance"
+            v-else
             @click="unloadModel(m)"
             :disabled="loadingModel === m.family"
             class="btn-unload"
@@ -45,24 +36,16 @@
             {{ loadingModel === m.family ? t("models.unloading") : t("models.unload") }}
           </button>
           <button @click="showConfig(m)" class="btn-config">
-            ⚙️ 配置
-          </button>
-          <button
-            v-if="!m.disabled"
-            @click="disableModel(m)"
-            class="btn-disable"
-            title="禁用模型（防止自动加载）"
-          >
-            禁用
+            ⚙️ {{ t("models.config") }}
           </button>
         </div>
       </div>
     </div>
     <div v-else class="empty-state">
       <p>{{ t("models.none") }}</p>
-      <p class="hint">{{ t("models.hint", { path: "`models_dir`" }) }}</p>
+      <p class="hint">{{ t("models.hint") }}</p>
     </div>
-    <!-- Model Config Modal -->
+    <!-- Provider Params Modal (generic key/value editor) -->
     <div v-if="showConfigModal" class="modal-overlay" @click.self="closeConfig">
       <div class="modal-content config-modal">
         <div class="modal-header">
@@ -70,121 +53,27 @@
           <button class="modal-close" @click="closeConfig">&times;</button>
         </div>
         <div class="modal-body">
+          <p class="mtp-description"><p>{{ t("models.configHint") }}</p></p>
           <div class="config-section">
-            <h4>{{ t("models.configMemory") }}</h4>
-            <div class="form-group">
-              <label>{{ t("settings.labels.gpuLayers") }}</label>
-              <input v-model.number="modelConfig.gpu_layers" type="number" min="0" max="999" />
-            </div>
-            <div class="form-group">
-              <label>{{ t("settings.labels.ctxSize") }}</label>
-              <div class="ctx-input-wrap">
-                <input v-model.number="ctx_size_k" type="number" min="1" max="128" step="1" />
-                <span class="ctx-unit">K</span>
-              </div>
-            </div>
-            <div class="form-group">
-              <label>{{ t("settings.labels.threads") }}</label>
-              <input v-model.number="modelConfig.threads" type="number" min="1" max="32" />
-            </div>
-            <div class="form-group">
-              <label>{{ t("settings.labels.batchSize") }}</label>
-              <input v-model.number="modelConfig.batch_size" type="number" min="1" max="4096" />
+            <div v-for="(v, k) in modelConfig" :key="k" class="form-group">
+              <label>{{ k }}</label>
+              <input v-if="typeof v === 'boolean'"
+                     type="checkbox" :checked="modelConfig[k]" @change="modelConfig[k] = !modelConfig[k]" />
+              <input v-else-if="typeof v === 'number'"
+                     v-model.number="modelConfig[k]" type="number" step="any" />
+              <input v-else v-model="modelConfig[k]" type="text" />
             </div>
           </div>
           <div class="config-section">
-            <h4>{{ t("models.configAdvanced") }}</h4>
-            <div class="form-group checkbox-group">
-              <label>
-                <input v-model="modelConfig.flash_attn" type="checkbox" />
-                {{ t("settings.options.flashAttn") }}
-              </label>
-            </div>
-            <div class="form-group checkbox-group">
-              <label>
-                <input v-model="modelConfig.cont_batching" type="checkbox" />
-                {{ t("settings.options.contBatching") }}
-              </label>
-            </div>
-            <div class="form-group checkbox-group">
-              <label>
-                <input v-model="modelConfig.mmap" type="checkbox" />
-                {{ t("settings.options.mmap") }}
-              </label>
-            </div>
-            <div class="form-group checkbox-group">
-              <label>
-                <input v-model="modelConfig.mlock" type="checkbox" />
-                {{ t("settings.options.mlock") }}
-              </label>
-            </div>
-          </div>
-          <div class="config-section">
-            <h4>{{ t("models.configMTP") }}</h4>
-            <div class="mtp-description">
-              <p>{{ t("models.mtpDescription") }}</p>
-            </div>
-            <div class="form-group checkbox-group">
-              <label>
-                <input v-model="modelConfig.mtp_enabled" type="checkbox" />
-                {{ t("models.mtpEnabled") }}
-              </label>
-            </div>
-            <div v-if="modelConfig.mtp_enabled" class="mtp-params">
-              <div class="form-group">
-                <label>{{ t("models.mtpPredictions") }}</label>
-                <input v-model.number="modelConfig.mtp_predictions" type="number" min="1" max="20" />
-                <span class="param-hint">{{ t("models.mtpPredictionsHint") }}</span>
-              </div>
-              <div class="form-group">
-                <label>{{ t("models.mtpMinTokens") }}</label>
-                <input v-model.number="modelConfig.mtp_min_tokens" type="number" min="0" max="1000" />
-                <span class="param-hint">{{ t("models.mtpMinTokensHint") }}</span>
-              </div>
-              <div class="form-group">
-                <label>{{ t("models.mtpTemp") }}</label>
-                <input v-model.number="modelConfig.mtp_temperature" type="number" min="0" max="2" step="0.1" />
-                <span class="param-hint">{{ t("models.mtpTempHint") }}</span>
-              </div>
-              <div class="form-group">
-                <label>{{ t("models.mtpProbThreshold") }}</label>
-                <input v-model.number="modelConfig.mtp_prob_threshold" type="number" min="0" max="1" step="0.01" />
-                <span class="param-hint">{{ t("models.mtpProbThresholdHint") }}</span>
-              </div>
-              <div class="form-group">
-                <label>{{ t("models.mtpParallel") }}</label>
-                <input v-model.number="modelConfig.mtp_parallel" type="number" min="1" max="8" />
-                <span class="param-hint">{{ t("models.mtpParallelHint") }}</span>
-              </div>
-            </div>
-          </div>
-          <div class="config-section">
-            <h4>{{ t("models.configKVCache") }}</h4>
+            <h4>{{ t("models.configAdd") }}</h4>
             <div class="form-group">
-              <label>{{ t("models.configKVTypeK") }}</label>
-              <select v-model="modelConfig.cache_type_k">
-                <option value="f16">F16</option>
-                <option value="f32">F32</option>
-                <option value="q4_0">Q4_0</option>
-                <option value="q8_0">Q8_0</option>
-              </select>
+              <label>{{ t("models.configAddKey") }}</label>
+              <input v-model="newParamKey" type="text" placeholder="key" />
             </div>
             <div class="form-group">
-              <label>{{ t("models.configKVTypeV") }}</label>
-              <select v-model="modelConfig.cache_type_v">
-                <option value="f16">F16</option>
-                <option value="f32">F32</option>
-                <option value="q4_0">Q4_0</option>
-                <option value="q8_0">Q8_0</option>
-              </select>
-            </div>
-          </div>
-          <div class="config-section">
-            <h4>{{ t("models.configPresets") }}</h4>
-            <div class="preset-buttons">
-              <button @click="applyPreset('lightweight')" class="btn-preset">{{ t("models.presetLightweight") }}</button>
-              <button @click="applyPreset('balanced')" class="btn-preset">{{ t("models.presetBalanced") }}</button>
-              <button @click="applyPreset('highPerformance')" class="btn-preset">{{ t("models.presetHighPerformance") }}</button>
+              <label>{{ t("models.configAddValue") }}</label>
+              <input v-model="newParamValue" type="text" placeholder="value" />
+              <button class="btn-preset" @click="addParam">+</button>
             </div>
           </div>
         </div>
@@ -197,204 +86,107 @@
   </div>
 </template>
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { ref, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
+import { storeToRefs } from "pinia";
+import { useGatewayStore } from "../stores/gateway";
+import { getModelParams } from "../api/models";
+import type { ModelEndpoint } from "../types";
+
 const { t } = useI18n();
-interface Model {
-  family: string;
-  name: string;
-  display: string;
-  path: string;
-  size_gb: number;
-  quantization: string;
-  params_b: number;
-  default_port: number;
-  plugin_name: string;
-  disabled?: boolean;
-  instance: null | {
-    plugin_name: string;
-    pid: number;
-    port: number;
-    status: string;
-  };
-}
-const models = ref<Model[]>([]);
+const store = useGatewayStore();
+const { providers } = storeToRefs(store);
+
 const scanning = ref(false);
 const loadingModel = ref<string | null>(null);
 const showConfigModal = ref(false);
-const selectedModel = ref<Model | null>(null);
-const modelConfig = ref<any>({
-  gpu_layers: 99,
-  ctx_size: 32768,
-  ctx_size_k: 32,  // K 单位显示值
-  threads: 0,
-  batch_size: 1024,
-  flash_attn: false,
-  cont_batching: false,
-  mmap: true,
-  mlock: false,
-  cache_type_k: 'f16',
-  cache_type_v: 'f16',
-  mtp_enabled: false,
-  mtp_predictions: 4,
-  mtp_min_tokens: 0,
-  mtp_temperature: 1.0,
-  mtp_prob_threshold: 0.5,
-  mtp_parallel: 1,
-});
-// ctx_size 显示为 K 单位（32K=32768 tokens）
-const ctx_size_k = computed({
-  get: () => Math.round((modelConfig.value.ctx_size || 32768) / 1024),
-  set: (val: number) => {
-    modelConfig.value.ctx_size = val * 1024;
-    modelConfig.value.ctx_size_k = val;
-  },
-});
+const selectedModel = ref<ModelEndpoint | null>(null);
+const modelConfig = ref<Record<string, any>>({});
+const newParamKey = ref("");
+const newParamValue = ref("");
+
 async function scan() {
   scanning.value = true;
   try {
-    const res = await fetch("/api/models/scan", { method: "POST", credentials: "include" });
-    const data = await res.json();
-    models.value = data.models || [];
+    await store.rescan();
   } catch (e) {
     alert(t("models.errorScan"));
   } finally {
     scanning.value = false;
   }
 }
-async function loadModel(m: Model) {
+
+async function loadModel(m: ModelEndpoint) {
   loadingModel.value = m.family;
   try {
-    const port = m.default_port || 8080;
-    const res = await fetch(`/api/models/${m.family}/load`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ port }),
-      credentials: "include",
-    });
-    const data = await res.json();
-    if (data.ok) {
-      await refresh();
-    } else {
-      alert(t("models.errorLoad", { msg: data.error || "Unknown error" }));
-    }
+    await store.start(m.family);
   } catch (e: any) {
     alert(t("models.errorLoad", { msg: e.message }));
   } finally {
     loadingModel.value = null;
   }
 }
-async function unloadModel(m: Model) {
+
+async function unloadModel(m: ModelEndpoint) {
   if (!confirm(t("models.confirmUnload", { name: m.display }))) return;
   loadingModel.value = m.family;
   try {
-    const res = await fetch(`/api/models/${m.family}/unload`, {
-      method: "POST",
-      credentials: "include",
-    });
-    const data = await res.json();
-    if (data.ok) {
-      await refresh();
-    } else {
-      alert(t("models.errorUnload", { msg: data.error || "Unknown error" }));
-    }
+    await store.stop(m.family);
   } catch (e: any) {
     alert(t("models.errorUnload", { msg: e.message }));
   } finally {
     loadingModel.value = null;
   }
 }
-async function disableModel(m: Model) {
-  if (!confirm(`确定要禁用模型 ${m.display} 吗？禁用后不会被系统自动加载。`)) return;
-  loadingModel.value = m.family;
-  try {
-    const res = await fetch(`/api/models/${m.family}/disable`, {
-      method: "POST",
-      credentials: "include",
-    });
-    const data = await res.json();
-    if (data.ok) {
-      await refresh();
-      alert(t("models.disabled", { name: m.display }));
-    } else {
-      alert(t("models.errorDisable", { msg: data.error || "Unknown error" }));
-    }
-  } catch (e: any) {
-    alert(t("models.errorDisable", { msg: e.message }));
-  } finally {
-    loadingModel.value = null;
-  }
-}
-async function enableModel(m: Model) {
-  loadingModel.value = m.family;
-  try {
-    const res = await fetch(`/api/models/${m.family}/enable`, {
-      method: "POST",
-      credentials: "include",
-    });
-    const data = await res.json();
-    if (data.ok) {
-      await refresh();
-      alert(t("models.enabled", { name: m.display }));
-    } else {
-      alert(t("models.errorEnable", { msg: data.error || "Unknown error" }));
-    }
-  } catch (e: any) {
-    alert(t("models.errorEnable", { msg: e.message }));
-  } finally {
-    loadingModel.value = null;
-  }
-}
+
 async function refresh() {
-  try {
-    const res = await fetch("/api/models", { credentials: "include" });
-    const data = await res.json();
-    models.value = data.models || [];
-    // Debug: log instance status
-    console.log("Models with instance:", models.value.filter(m => m.instance));
-  } catch (e) {
-    console.error("Failed to refresh models:", e);
-  }
+  await store.refresh();
 }
-function showConfig(m: Model) {
+
+async function showConfig(m: ModelEndpoint) {
   selectedModel.value = m;
   showConfigModal.value = true;
-  
-  // Load existing config or use defaults
-  fetch(`/api/config/model-config/${encodeURIComponent(m.family)}`, { credentials: "include" })
-    .then(res => {
-      if (res.ok) {
-        return res.json();
-      } else {
-        return null;
-      }
-    })
-    .then(data => {
-      if (data && data.params) {
-        modelConfig.value = { ...modelConfig.value, ...data.params };
-      }
-    })
-    .catch(() => {
-      // Use defaults
-    });
+  newParamKey.value = "";
+  newParamValue.value = "";
+  try {
+    const params = await getModelParams(m.family);
+    modelConfig.value = { ...params };
+  } catch {
+    modelConfig.value = {};
+  }
 }
+
 function closeConfig() {
   showConfigModal.value = false;
   selectedModel.value = null;
 }
+
+function addParam() {
+  const key = newParamKey.value.trim();
+  if (!key) return;
+  const raw = newParamValue.value.trim();
+  let val: any = raw;
+  if (/^-?\d+$/.test(raw)) val = parseInt(raw, 10);
+  else if (/^-?\d+\.\d+$/.test(raw)) val = parseFloat(raw);
+  else if (raw === "true") val = true;
+  else if (raw === "false") val = false;
+  modelConfig.value[key] = val;
+  newParamKey.value = "";
+  newParamValue.value = "";
+}
+
 async function saveModelConfig() {
   if (!selectedModel.value) return;
-  
   try {
-    const res = await fetch(`/api/config/model-config/${encodeURIComponent(selectedModel.value.family)}`, {
-      method: "POST",
+    const res = await fetch(`/api/models/${selectedModel.value.family}/params`, {
+      method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ params: modelConfig.value }),
       credentials: "include",
     });
-    
     if (res.ok) {
       closeConfig();
+      await store.refresh();
       alert(t("models.configSaved"));
     } else {
       alert(t("models.configError"));
@@ -403,73 +195,7 @@ async function saveModelConfig() {
     alert(t("models.configError"));
   }
 }
-function applyPreset(preset: string) {
-  switch (preset) {
-    case 'lightweight':
-      modelConfig.value = {
-        gpu_layers: 20,
-        ctx_size: 4096,
-        ctx_size_k: 4,
-        threads: 4,
-        batch_size: 512,
-        flash_attn: false,
-        cont_batching: false,
-        mmap: true,
-        mlock: false,
-        cache_type_k: 'f16',
-        cache_type_v: 'f16',
-        mtp_enabled: false,
-        mtp_predictions: 2,
-        mtp_min_tokens: 0,
-        mtp_temperature: 1.0,
-        mtp_prob_threshold: 0.7,
-        mtp_parallel: 1,
-      };
-      break;
-    case 'balanced':
-      modelConfig.value = {
-        gpu_layers: 40,
-        ctx_size: 8192,
-        ctx_size_k: 8,
-        threads: 8,
-        batch_size: 1024,
-        flash_attn: true,
-        cont_batching: true,
-        mmap: true,
-        mlock: false,
-        cache_type_k: 'f16',
-        cache_type_v: 'f16',
-        mtp_enabled: true,
-        mtp_predictions: 4,
-        mtp_min_tokens: 0,
-        mtp_temperature: 0.8,
-        mtp_prob_threshold: 0.5,
-        mtp_parallel: 2,
-      };
-      break;
-    case 'highPerformance':
-      modelConfig.value = {
-        gpu_layers: 99,
-        ctx_size: 16384,
-        ctx_size_k: 16,
-        threads: 16,
-        batch_size: 2048,
-        flash_attn: true,
-        cont_batching: true,
-        mmap: true,
-        mlock: true,
-        cache_type_k: 'f32',
-        cache_type_v: 'f32',
-        mtp_enabled: true,
-        mtp_predictions: 8,
-        mtp_min_tokens: 0,
-        mtp_temperature: 0.6,
-        mtp_prob_threshold: 0.3,
-        mtp_parallel: 4,
-      };
-      break;
-  }
-}
+
 onMounted(scan);
 </script>
 <style scoped>

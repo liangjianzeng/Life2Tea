@@ -105,6 +105,25 @@ async def get_model_params(family: str, request: Request):
     return {"family": family, "params": endpoint.spec.params}
 
 
+class ParamsBody(BaseModel):
+    params: Dict = {}
+
+
+@router.put("/{family}/params", summary="Update launch/sampling params for an endpoint")
+async def update_model_params(family: str, body: ParamsBody, request: Request,
+                             _auth: None = auth_dep):
+    """Update a provider's params in the gateway config (persisted to gateway.json)."""
+    manager = _get_manager(request)
+    providers = manager.get_config().get("providers", {})
+    if family not in providers:
+        raise HTTPException(status_code=404, detail="Model not found")
+    entry = dict(providers[family])
+    entry["params"] = dict(body.params or {})
+    providers[family] = entry
+    manager.update_providers(providers)
+    return {"ok": True, "family": family, "params": entry["params"]}
+
+
 @router.post("/{family}/load", summary="Start model backend")
 async def load_model(family: str, request: Request, body: LoadModelBody = None,
                      _auth: None = auth_dep):
