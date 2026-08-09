@@ -141,6 +141,9 @@ export default {
     you: "你",
     ai: "助手",
     error: "错误：{msg}",
+    selectModel: "选择模型",
+    running: "运行中",
+    retry: "重试",
   },
 
   models: {

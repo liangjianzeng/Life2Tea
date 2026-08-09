@@ -31,7 +31,16 @@
       <div class="chat-header">
         <button class="btn-sidebar-open" @click="toggleSidebar" title="Toggle conversations">☰</button>
         <h2>{{ t("chat.title") }}</h2>
+        <select v-if="allModels.length" class="model-select" v-model="selectedModel" @change="onModelChange">
+          <option value="" disabled>{{ t("chat.selectModel") }}</option>
+          <option v-for="m in allModels" :key="m.family" :value="m.family">
+            {{ m.display }} · {{ m.status === "running" ? t("chat.running") : m.status }}
+          </option>
+        </select>
         <span class="model-badge" v-if="selectedModel">{{ selectedModel }}</span>
+        <button v-if="errorMsg && !loading" class="retry-btn" @click="retry">
+          ↻ {{ t("chat.retry") }}
+        </button>
       </div>
 
       <!-- Fixed-height scrollable messages area -->
@@ -74,8 +83,10 @@ const messages = ref<{ role: string; content: string }[]>([]);
 const inputMessage = ref("");
 const loading = ref(false);
 const streamingContent = ref("");
+const errorMsg = ref("");
 const selectedModel = ref<string | null>(null);
 const allModels = ref<any[]>([]);
+let lastUserText = "";
 const conversations = ref<any[]>([]);
 const messagesContainer = ref<HTMLElement | null>(null);
 const inputRef = ref<HTMLTextAreaElement | null>(null);
@@ -89,8 +100,8 @@ async function loadModels() {
       const data = await response.json();
       allModels.value = data.models || [];
       for (const m of allModels.value) {
-        if (m.instance && m.instance.status === "running") {
-          selectedModel.value = m.display;
+        if (m.status === "running") {
+          selectedModel.value = m.family;
           break;
         }
       }
@@ -123,14 +134,8 @@ async function switchConversation(conv: any) {
     if (response.ok) {
       const data = await response.json();
       messages.value = data.messages.map((m: any) => ({ role: m.role, content: m.content }));
-      if (conv.model_family && allModels.value.length > 0) {
-        for (const m of allModels.value) {
-          if (m.family === conv.model_family && m.instance?.status === "running") {
-            selectedModel.value = m.display;
-            break;
-          }
-        }
-      }
+      selectedModel.value = conv.model_family || null;
+      errorMsg.value = "";
     }
   } catch (e) { /* silent */ }
   await nextTick();
@@ -156,6 +161,19 @@ async function createNewConversation() {
       await loadConversations();
       inputRef.value?.focus();
     }
+  } catch (e) { /* silent */ }
+}
+
+async function onModelChange() {
+  errorMsg.value = "";
+  if (!conversationId) return;
+  try {
+    await fetch("/api/chat/conversation/" + conversationId, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model_family: selectedModel.value || null }),
+      credentials: "include",
+    });
   } catch (e) { /* silent */ }
 }
 
@@ -212,14 +230,18 @@ async function saveMessage(role: string, content: string) {
   }
 }
 
-async function sendMessage() {
-  const text = inputMessage.value.trim();
+async function sendMessage(useLast = false) {
+  const text = useLast ? lastUserText : inputMessage.value.trim();
   if (!text || loading.value) return;
 
-  messages.value.push({ role: "user", content: text });
-  inputMessage.value = "";
+  if (!useLast) {
+    messages.value.push({ role: "user", content: text });
+    lastUserText = text;
+    inputMessage.value = "";
+  }
   loading.value = true;
   streamingContent.value = "";
+  errorMsg.value = "";
 
   await saveMessage("user", text);
   await nextTick();
@@ -231,53 +253,87 @@ async function sendMessage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         messages: messages.value.map(m => ({ role: m.role, content: m.content })),
+        model: selectedModel.value || undefined,
         stream: true, max_tokens: 2048,
       }),
       credentials: "include",
     });
 
-    if (!response.ok) throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(text ? `HTTP ${response.status}: ${text}` : `HTTP ${response.status}`);
+    }
 
     const reader = response.body?.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
+    let streamError = "";
+    let done = false;
 
     if (reader) {
       while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+        const { done: rdone, value } = await reader.read();
+        if (rdone) break;
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
         buffer = lines.pop() || "";
         for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            const data = line.slice(6);
-            if (data === "[DONE]") break;
-            try {
-              const json = JSON.parse(data);
-              const content = json.choices?.[0]?.delta?.content || "";
-              streamingContent.value += content;
-              await nextTick();
-              scrollToBottom();
-            } catch (e) { /* ignore */ }
-          }
+          const trimmed = line.trim();
+          // Skip SSE comment lines (heartbeat)
+          if (trimmed.startsWith(":")) continue;
+          if (!trimmed.startsWith("data: ")) continue;
+          const data = trimmed.slice(6);
+          if (data === "[DONE]") { done = true; break; }
+          try {
+            const json = JSON.parse(data);
+            if (json.error) {
+              streamError = json.error.message || JSON.stringify(json.error);
+              break;
+            }
+            const content = json.choices?.[0]?.delta?.content || "";
+            streamingContent.value += content;
+            await nextTick();
+            scrollToBottom();
+          } catch (e) { /* ignore partial/keep-alive */ }
         }
+        if (done || streamError) break;
       }
     }
 
-    messages.value.push({ role: "assistant", content: streamingContent.value });
-    streamingContent.value = "";
-    await saveMessage("assistant", messages.value[messages.value.length - 1].content);
+    if (streamError) {
+      throw new Error(streamError);
+    }
+
+    if (streamingContent.value || !done) {
+      messages.value.push({ role: "assistant", content: streamingContent.value });
+      streamingContent.value = "";
+      await saveMessage("assistant", messages.value[messages.value.length - 1].content);
+    }
   } catch (error: any) {
-    const errMsg = error.message || t("chat.error", { msg: "Failed to send message" });
-    messages.value.push({ role: "assistant", content: t("chat.error", { msg: errMsg }) });
-    await saveMessage("assistant", messages.value[messages.value.length - 1].content);
+    const errMsg = error.message || "Failed to send message";
+    errorMsg.value = errMsg;
+    streamingContent.value = "";
+    // Do not append an error bubble for a stream that already produced content
+    if (!messages.value[messages.value.length - 1]?.content) {
+      messages.value.push({ role: "assistant", content: t("chat.error", { msg: errMsg }) });
+      await saveMessage("assistant", messages.value[messages.value.length - 1].content);
+    }
   } finally {
     loading.value = false;
     await nextTick();
     scrollToBottom();
     inputRef.value?.focus();
   }
+}
+
+function retry() {
+  if (!lastUserText) return;
+  // Remove the trailing error bubble if present
+  if (messages.value[messages.value.length - 1]?.role === "assistant"
+      && messages.value[messages.value.length - 1].content.startsWith(t("chat.error").slice(0, 8))) {
+    messages.value.pop();
+  }
+  sendMessage(true);
 }
 
 function handleKeydown(e: KeyboardEvent) {
@@ -575,6 +631,29 @@ onMounted(async () => {
   padding: 2px 8px;
   border-radius: 12px;
 }
+
+.model-select {
+  background: #1a1a2e;
+  color: #e0e0ff;
+  border: 1px solid #2d2d4a;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 0.85em;
+  outline: none;
+  cursor: pointer;
+}
+.model-select:focus { border-color: #534ab7; }
+
+.retry-btn {
+  padding: 4px 12px;
+  background: #c0392b;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85em;
+}
+.retry-btn:hover { background: #e74c3c; }
 
 /* Fixed-height scrollable messages */
 .messages {

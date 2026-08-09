@@ -142,6 +142,9 @@ export default {
     you: "You",
     ai: "AI",
     error: "Error: {msg}",
+    selectModel: "Select model",
+    running: "running",
+    retry: "Retry",
   },
 
   models: {

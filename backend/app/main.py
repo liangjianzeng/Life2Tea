@@ -180,6 +180,40 @@ async def lifespan(app: FastAPI):
             config_mgr=app.state.config_mgr,
         )
         app.state.gateway = init_gateway(app.state.provider_manager)
+
+        # ── Wire gateway telemetry: real token usage → token_usage table ──
+        from app.core.metrics import InferenceRecord
+
+        _stats = app.state.stats_service
+        _metrics = app.state.metrics_collector
+
+        def _on_usage(model_name: str, usage: dict):
+            prompt = usage.get("prompt_tokens", 0)
+            completion = usage.get("completion_tokens", 0)
+            try:
+                _stats.record_token_usage(
+                    model_family=model_name,
+                    model_name=model_name,
+                    input_tokens=prompt,
+                    output_tokens=completion,
+                )
+            except Exception:
+                pass
+            try:
+                _metrics.record_inference(
+                    InferenceRecord(
+                        plugin_name=model_name,
+                        tokens_generated=completion,
+                        prompt_tokens=prompt,
+                        elapsed_seconds=0.0,
+                        tokens_per_second=0.0,
+                        backend="gateway",
+                    )
+                )
+            except Exception:
+                pass
+
+        app.state.gateway.on_usage = _on_usage
     except Exception as e:
         print(f"[LIFECYCLE] Error during initialization: {e}", flush=True)
         raise

@@ -197,7 +197,12 @@ async def _non_stream_chat(gateway: Gateway, chain, messages, params) -> Any:
     return _error_response(last_error or GatewayError("No model available", 503), chain[0].name if chain else "")
 
 
+_KEEPALIVE_SECONDS = 15
+
+
 def _stream_chat(gateway: Gateway, chain, messages, params):
+    import asyncio
+
     async def gen():
         last_error: Optional[GatewayError] = None
         for endpoint in chain:
@@ -218,7 +223,40 @@ def _stream_chat(gateway: Gateway, chain, messages, params):
         yield f"data: {json.dumps({'error': {'message': err.message, 'type': err.error_type}})}\n\n"
         yield "data: [DONE]\n\n"
 
-    return StreamingResponse(gen(), media_type="text/event-stream")
+    async def with_heartbeat():
+        queue: asyncio.Queue = asyncio.Queue()
+        stopped = asyncio.Event()
+
+        async def heartbeat():
+            try:
+                while not stopped.is_set():
+                    await asyncio.sleep(_KEEPALIVE_SECONDS)
+                    await queue.put(": keep-alive\n\n")
+            except asyncio.CancelledError:
+                pass
+
+        async def pump():
+            try:
+                async for chunk in gen():
+                    await queue.put(chunk)
+            finally:
+                await queue.put(None)
+
+        hb_task = asyncio.create_task(heartbeat())
+        pump_task = asyncio.create_task(pump())
+        try:
+            while True:
+                chunk = await queue.get()
+                if chunk is None:
+                    break
+                yield chunk
+        finally:
+            stopped.set()
+            hb_task.cancel()
+            pump_task.cancel()
+            await asyncio.gather(hb_task, pump_task, return_exceptions=True)
+
+    return StreamingResponse(with_heartbeat(), media_type="text/event-stream")
 
 
 @gateway_router.post("/v1/completions")

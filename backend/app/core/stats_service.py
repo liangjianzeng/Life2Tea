@@ -292,6 +292,28 @@ class StatsService:
         finally:
             conn.close()
 
+    def record_token_usage(self, model_family: str, model_name: str,
+                           input_tokens: int, output_tokens: int,
+                           timestamp: str = None, key_id: int = None) -> int:
+        """Persist real per-request token usage into token_usage."""
+        if timestamp is None:
+            timestamp = self._now_iso()
+        conn = self.db.get_connection()
+        try:
+            cursor = conn.execute(
+                """INSERT INTO token_usage
+                   (key_id, model_family, model_name, input_tokens, output_tokens, timestamp)
+                   VALUES (?,?,?,?,?,?)""",
+                (key_id, model_family, model_name, input_tokens, output_tokens, timestamp),
+            )
+            conn.commit()
+            return cursor.lastrowid
+        finally:
+            conn.close()
+
+    def _now_iso(self) -> str:
+        return datetime.now().isoformat()
+
     # ── Dashboard & stats ───────────────────────────────
 
     def get_dashboard_stats(self) -> Dict[str, Any]:

@@ -56,6 +56,11 @@ class ConversationCreateBody(BaseModel):
     model_family: Optional[str] = None
 
 
+class ConversationUpdateBody(BaseModel):
+    title: Optional[str] = None
+    model_family: Optional[str] = None
+
+
 class MessageBody(BaseModel):
     conversation_id: str
     role: str
@@ -264,6 +269,33 @@ async def get_conversation(conversation_id: str, request: Request):
             },
             "messages": messages,
         }
+    finally:
+        db.close()
+
+
+@router.put("/conversation/{conversation_id}", summary="Update conversation (title / model)")
+async def update_conversation(conversation_id: str, body: ConversationUpdateBody, request: Request):
+    from ..core.database import _db
+    db = _db.get_connection()
+    try:
+        now = datetime.now().timestamp()
+        if body.title is not None and body.model_family is not None:
+            db.execute(
+                "UPDATE conversations SET title = ?, model_family = ?, updated_at = ? WHERE id = ?",
+                (body.title, body.model_family, now, conversation_id),
+            )
+        elif body.title is not None:
+            db.execute(
+                "UPDATE conversations SET title = ?, updated_at = ? WHERE id = ?",
+                (body.title, now, conversation_id),
+            )
+        else:
+            db.execute(
+                "UPDATE conversations SET model_family = ?, updated_at = ? WHERE id = ?",
+                (body.model_family, now, conversation_id),
+            )
+        db.commit()
+        return {"ok": True, "conversation_id": conversation_id}
     finally:
         db.close()
 
