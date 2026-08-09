@@ -28,7 +28,6 @@ export default {
     nav: {
       chat: "聊天",
       models: "模型",
-      plugins: "插件",
       settings: "设置",
       apiKeys: "API 密钥",
       dashboard: "监控仪表盘",
@@ -189,23 +188,6 @@ export default {
     mtpTempHint: "预测时的采样温度，较低值使预测更确定性",
     mtpProbThresholdHint: "概率阈值，低于此值的预测被过滤",
     mtpParallelHint: "并行预测数，高值增加内存使用但可能提高速度",
-  },
-
-  plugins: {
-    title: "插件",
-    refresh: "刷新",
-    refreshing: "刷新中...",
-    load: "加载",
-    loading: "加载中...",
-    unload: "卸载",
-    unloading: "卸载中...",
-    running: "运行中，端口 {port}",
-    stopped: "已停止",
-    none: "未找到插件。",
-    hint: "请在设置中扫描模型以发现插件。",
-    confirmUnload: "确定要卸载 {name} 吗？",
-    errorLoad: "加载插件失败：{msg}",
-    errorUnload: "卸载插件失败：{msg}",
   },
 
   settings: {

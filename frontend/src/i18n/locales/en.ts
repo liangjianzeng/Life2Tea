@@ -28,7 +28,6 @@ export default {
     nav: {
       chat: "Chat",
       models: "Models",
-      plugins: "Plugins",
       settings: "Settings",
       apiKeys: "API Keys",
       dashboard: "Dashboard",
@@ -190,23 +189,6 @@ export default {
     mtpTempHint: "Sampling temperature for predictions, lower values make predictions more deterministic",
     mtpProbThresholdHint: "Probability threshold, predictions below this are filtered out",
     mtpParallelHint: "Parallel predictions count, higher values increase memory usage but may improve speed",
-  },
-
-  plugins: {
-    title: "Plugins",
-    refresh: "Refresh",
-    refreshing: "Refreshing...",
-    load: "Load",
-    loading: "Loading...",
-    unload: "Unload",
-    unloading: "Unloading...",
-    running: "Running on port {port}",
-    stopped: "Stopped",
-    none: "No plugins found.",
-    hint: "Scan models in Settings to discover plugins.",
-    confirmUnload: "Unload {name}?",
-    errorLoad: "Failed to load plugin: {msg}",
-    errorUnload: "Failed to unload plugin: {msg}",
   },
 
   settings: {

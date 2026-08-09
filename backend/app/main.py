@@ -60,12 +60,7 @@ from app.core.logger import (
 )
 from app.core.metrics import MetricsCollector
 from app.core.stats_service import StatsService
-from app.plugins.lifecycle import PluginLifecycleManager
-from app.plugins.model_registry import ModelRegistry
 from app.core.model_router import ModelRouter
-from app.plugins.backend_registry import (
-    detect_backend, list_all_available_backends, scan_system_for_llama_servers
-)
 
 
 # ── Helpers to get managers from app.state ───────────
@@ -110,34 +105,12 @@ def get_stats_service(request: Request = None) -> StatsService:
     return mgr
 
 
-def get_lifecycle_mgr(request: Request = None) -> PluginLifecycleManager:
-    state = _get_state(request)
-    mgr = getattr(state, "lifecycle_mgr", None)
-    if mgr is None:
-        raise RuntimeError("PluginLifecycleManager not initialized")
-    return mgr
-
-
-def get_model_registry(request: Request = None) -> ModelRegistry:
-    state = _get_state(request)
-    mgr = getattr(state, "model_registry", None)
-    if mgr is None:
-        raise RuntimeError("ModelRegistry not initialized")
-    return mgr
-
 def get_model_router(request: Request = None) -> ModelRouter:
     state = _get_state(request)
     mgr = getattr(state, "model_router", None)
     if mgr is None:
         raise RuntimeError("ModelRouter not initialized")
     return mgr
-
-
-def get_plugin_registry(request: Request = None):
-    """PluginRegistry dependency. Returns None if not initialized (e.g. in
-    unit tests) so routers can degrade gracefully to the legacy registry."""
-    state = _get_state(request)
-    return getattr(state, "plugin_registry", None)
 
 
 def _get_config_dir() -> str:
@@ -192,10 +165,6 @@ async def lifespan(app: FastAPI):
         app.state.stats_service = StatsService(app.state.db)
         app.state.stats_service.create_tables()
         register_stats_service(app.state.stats_service)
-        app.state.lifecycle_mgr = PluginLifecycleManager(log_dir)
-        app.state.model_registry = ModelRegistry(_get_models_dir(), config_mgr=app.state.config_mgr)
-        from app.core.routing import SystemRouter
-        app.state.system_router = SystemRouter()
         # Initialize ModelRouter for unified routing
         from app.core.model_router import init_model_router
         app.state.model_router = init_model_router(
@@ -215,29 +184,14 @@ async def lifespan(app: FastAPI):
         print(f"[LIFECYCLE] Error during initialization: {e}", flush=True)
         raise
 
-    # Initialize plugin registry: manifests first, GGUF files as fallback.
-    from app.plugins.registry import PluginRegistry
-    models_dir = _get_models_dir()
-    root = Path(PROJECT_ROOT)
-    plugin_roots = [str(root / "plugins" / "models"),
-                    str(root / "plugins" / "experts")]
-    app.state.plugin_registry = PluginRegistry(
-        plugin_roots, env={"MODELS_DIR": models_dir or ""}, repo_root=str(root)
-    )
-    app.state.plugin_registry.discover_with_gguf_fallback(models_dir)
-
     logger = app.state.logger_mgr
     logger.info("system", f"Life2Tea backend starting (project root: {PROJECT_ROOT})")
     logger.info("system", f"Config dir: {config_dir}")
     logger.info("system", f"Log dir: {log_dir}")
 
-    # Auto-scan models if dir is configured (legacy GGUF index, kept for compat)
-    if models_dir and os.path.isdir(models_dir):
-        app.state.model_registry.scan()
-        n_plugins = len([d for d in app.state.plugin_registry.list_plugins(type="model")])
-        logger.info("system", f"Scanned models dir: {models_dir}, found "
-                    f"{len(app.state.model_registry.list_models())} models, "
-                    f"{n_plugins} plugin descriptors")
+    # Log configured gateway providers
+    providers = app.state.provider_manager.get_config().get("providers", {})
+    logger.info("system", f"Configured model endpoints: {len(providers)}")
 
     # ── Initialize API key manager ──
     print("[LIFECYCLE] Initializing API key manager...", flush=True)
@@ -250,7 +204,7 @@ async def lifespan(app: FastAPI):
 
     # ── Include other routers after managers are initialized ──
     print("[LIFECYCLE] Including routers...", flush=True)
-    from app.routers import config_router, models_router, plugins_router
+    from app.routers import config_router, models_router
     from app.routers import chat_router, metrics_router, logs_router, routing_router
     from app.routers import auth_router, stats_router
     
@@ -260,7 +214,6 @@ async def lifespan(app: FastAPI):
 
     app.include_router(config_router, prefix="/api/config", tags=["Config"])
     app.include_router(models_router, prefix="/api/models", tags=["Models"])
-    app.include_router(plugins_router, prefix="/api/plugins", tags=["Plugins"])
     app.include_router(chat_router, prefix="/api/chat", tags=["Chat"])
     app.include_router(metrics_router, prefix="/api/metrics", tags=["Metrics"])
     app.include_router(logs_router, prefix="/api/logs", tags=["Logs"])
@@ -293,7 +246,6 @@ async def lifespan(app: FastAPI):
             asyncio.get_event_loop().run_until_complete(app.state.provider_manager.stop_all())
         except Exception:
             pass
-    app.state.lifecycle_mgr.stop_all()
     logger.info("system", "Life2Tea backend stopped")
 
 

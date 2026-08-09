@@ -8,7 +8,6 @@
         <router-link to="/">{{ t("app.nav.chat") }}</router-link>
         <router-link to="/dashboard">{{ t("app.nav.dashboard") }}</router-link>
         <router-link to="/models">{{ t("app.nav.models") }}</router-link>
-        <router-link to="/plugins">{{ t("app.nav.plugins") }}</router-link>
         <router-link to="/settings">{{ t("app.nav.settings") }}</router-link>
         <router-link to="/api-keys">{{ t("app.nav.apiKeys") }}</router-link>
         <router-link to="/logs">{{ t("app.nav.logs") }}</router-link>
@@ -29,7 +28,6 @@
         <router-link to="/">{{ t("app.nav.chat") }}</router-link>
         <router-link to="/dashboard">{{ t("app.nav.dashboard") }}</router-link>
         <router-link to="/models">{{ t("app.nav.models") }}</router-link>
-        <router-link to="/plugins">{{ t("app.nav.plugins") }}</router-link>
         <router-link to="/settings">{{ t("app.nav.settings") }}</router-link>
         <router-link to="/api-keys">{{ t("app.nav.apiKeys") }}</router-link>
         <router-link to="/logs">{{ t("app.nav.logs") }}</router-link>

@@ -1,5 +1,5 @@
 """
-routing_router.py — Router Rules API.
+routing_router.py — Router Rules API (gateway-backed).
 
 Endpoints:
   GET    /api/router/rules       — Get current routing rules
@@ -11,14 +11,12 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 
-from ..core.routing import SystemRouter
-
 router = APIRouter()
 
 
-def _get_router(request: Request) -> SystemRouter:
-    """Get SystemRouter instance from app.state."""
-    return request.app.state.system_router
+def _get_gateway(request: Request):
+    """Get the shared gateway (manager + router) from app.state."""
+    return request.app.state.gateway
 
 
 class RoutingRulesUpdate(BaseModel):
@@ -32,26 +30,25 @@ class PredictRequest(BaseModel):
 
 @router.get("/rules", summary="Get current routing rules")
 async def get_rules(request: Request):
-    router = _get_router(request)
-    return {"rules": router.get_rules()}
+    gateway = _get_gateway(request)
+    return {"rules": gateway.router.get_rules()}
 
 
 @router.put("/rules", summary="Update routing rules")
 async def update_rules(body: RoutingRulesUpdate, request: Request):
-    router = _get_router(request)
-    router.update_rules(body.rules)
-    return {"status": "ok", "rules": router.get_rules()}
+    gateway = _get_gateway(request)
+    gateway.router.update_rules(body.rules)
+    return {"status": "ok", "rules": gateway.router.get_rules()}
 
 
 @router.post("/predict", summary="Predict which model for a request")
 async def predict_model(body: PredictRequest, request: Request):
-    """Predict which model plugin would be selected for this request."""
-    router = _get_router(request)
-    task_type = router.classify_task(body.messages)
-    candidates = router.rules.get(task_type, router.rules["default"])
-
+    """Predict the fallback chain for a request."""
+    gateway = _get_gateway(request)
+    task_type = gateway.router.classify_task(body.messages)
+    chain = gateway.router.route_chain(body.messages, body.model_preference)
     return {
         "task_type": task_type,
-        "candidates": candidates,
-        "selected": candidates[0] if candidates else None,
+        "candidates": [e.name for e in chain],
+        "selected": chain[0].name if chain else None,
     }

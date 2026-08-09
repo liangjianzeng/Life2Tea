@@ -1,14 +1,9 @@
 """
-models_router.py — Model Discovery & Lifecycle API.
+models_router.py — Model Endpoint API (provider-based).
 
-Endpoints:
-  GET  /api/models
-  GET  /api/models/scan
-  GET  /api/models/{family}
-  POST /api/models/{family}/load
-  POST /api/models/{family}/unload
-  GET  /api/models/{family}/params
-  GET  /api/models/backends
+Exposes the gateway's configured providers/endpoints over /api/models so the
+frontend Models/Providers view can list, load, unload and configure them.
+No plugin-manifest concepts remain.
 """
 
 import os
@@ -17,52 +12,36 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict
 
-from ..main import get_config_mgr, get_model_registry, get_lifecycle_mgr, get_plugin_registry
-from ..plugins.model_registry import ModelRegistry
-from ..plugins.lifecycle import PluginLifecycleManager
-from ..plugins.registry import ModelInfoAdapter
-from ..core.config import ConfigManager
+from ..gateway.providers.base import EndpointStatus, GatewayError
 
 
 async def verify_auth(request: Request):
     """Verify authentication - session cookie or API key."""
-    print(f"*** verify_auth ENTRY *** {request.method} {request.url.path}", flush=True)
-    from app.core.user_service import get_user_service
-    from app.core.api_keys import get_api_key_manager
-
     session_id = request.cookies.get("life2tea_session")
-    print(f"*** session_id: {session_id}", flush=True)
     if session_id:
         try:
-            svc = get_user_service()
-            print(f"*** svc: {svc}", flush=True)
-            user = svc.validate_session(session_id)
-            print(f"*** user: {user}", flush=True)
+            from app.core.user_service import get_user_service
+            user = get_user_service().validate_session(session_id)
             if user:
                 request.state.current_user = user
-                print(f"*** auth OK", flush=True)
                 return
-        except Exception as e:
-            print(f"*** auth error: {e}", flush=True)
-
+        except Exception:
+            pass
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
-        manager = get_api_key_manager()
         try:
-            key = manager.verify_key(auth_header)
+            from app.core.api_keys import get_api_key_manager
+            key = get_api_key_manager().verify_key(auth_header)
             if key:
                 request.state.api_key = key
                 return
-        except Exception as e:
-            print(f"[verify_auth] api key validation error: {e}", flush=True)
-
+        except Exception:
+            pass
     # TEMPORARY: Skip authentication for testing (remove in production!)
-    print("[verify_auth] WARNING: Authentication skipped for testing", flush=True)
     request.state.current_user = {"username": "admin", "role": "admin"}
 
 
 auth_dep = Depends(verify_auth)
-
 
 router = APIRouter()
 
@@ -72,408 +51,115 @@ class LoadModelBody(BaseModel):
     port: Optional[int] = None
 
 
-def _merge_plugin_models(legacy_models: List[Dict], plugin_registry) -> List[Dict]:
-    """Add model-type plugins not already present (by family) in the legacy list.
-
-    Plugin-backed models carry ``source: "plugin"`` so the frontend can tell
-    them apart from raw GGUFs (``source`` defaults to absent/"gguf").
-    """
-    if plugin_registry is None:
-        return legacy_models
-    seen = {m.get("family") for m in legacy_models}
-    out = list(legacy_models)
-    for desc in plugin_registry.list_plugins(type="model"):
-        if desc.errors:
-            continue
-        if desc.manifest.model and desc.manifest.model.model_family not in seen:
-            try:
-                out.append(ModelInfoAdapter.from_manifest(desc.manifest).to_dict())
-            except Exception:
-                continue
-    return out
+def _get_manager(request: Request):
+    return request.app.state.provider_manager
 
 
-@router.get("", summary="List all discovered models (GGUFs + plugins)")
-async def list_models(
-    request: Request,
-    registry: ModelRegistry = Depends(get_model_registry),
-    lifecycle: PluginLifecycleManager = Depends(get_lifecycle_mgr),
-    plugin_registry=Depends(get_plugin_registry),
-    _auth: None = auth_dep,
-):
-    print(f"[list_models] ENTRY: family={None}", flush=True)
-    print(f"[list_models] current_user: {getattr(request.state, "current_user", None)}", flush=True)
-    models = _merge_plugin_models(registry.list_models(), plugin_registry)
-    # Attach running instance info to each model
-    for m in models:
-        family = m.get("family")
-        inst = lifecycle.get_instance(family)
-        if inst and inst.status == "running":
-            m["instance"] = inst.to_dict()
-        else:
-            m["instance"] = None
-    return {"models": models}
-
-
-@router.post("/scan", summary="Re-scan models directory")
-async def scan_models(
-    request: Request,
-    cfg_mgr: ConfigManager = Depends(get_config_mgr),
-    registry: ModelRegistry = Depends(get_model_registry),
-    plugin_registry=Depends(get_plugin_registry),
-    _auth: None = auth_dep,
-):
-    cfg = cfg_mgr.get_global()
-    models_dir = cfg.get("models_dir", "")
-    new_registry = ModelRegistry(models_dir, config_mgr=cfg_mgr)
-    # Update app.state so future requests see the new registry
-    import app.main as main_mod
-    main_mod.app.state.model_registry = new_registry
-    # Refresh the plugin registry too (new GGUFs become fallback descriptors)
-    if plugin_registry is not None:
-        plugin_registry.env["MODELS_DIR"] = models_dir
-        plugin_registry.discover_with_gguf_fallback(models_dir)
-        main_mod.app.state.plugin_registry = plugin_registry
-    models = _merge_plugin_models(new_registry.list_models(), plugin_registry)
-    return {"models": models}
-
-
-@router.get("/{family}", summary="Get model info")
-async def get_model(
-    family: str,
-    registry: ModelRegistry = Depends(get_model_registry),
-):
-    info = registry.get_model(family)
-    if not info:
-        raise HTTPException(status_code=404, detail="Model not found")
-    return registry._to_dict(info)
-
-
-@router.get("/{family}/params", summary="Get default params for a model family")
-async def get_model_params(
-    family: str,
-    registry: ModelRegistry = Depends(get_model_registry),
-):
-    params = registry.get_default_params(family)
-    return {"family": family, "params": params}
-
-
-@router.post("/{family}/unload", summary="Stop LLM backend for this model")
-async def unload_model(
-    family: str,
-    request: Request,
-    cfg_mgr: ConfigManager = Depends(get_config_mgr),
-    lifecycle: PluginLifecycleManager = Depends(get_lifecycle_mgr),
-    _auth: None = auth_dep,
-):
-    """Stop the model plugin instance."""
-    print(f"[unload_model] ENTRY: family={family}", flush=True)
-    try:
-        lifecycle.stop_plugin(family)
-        return {"ok": True, "message": f"Model {family} stopped"}
-    except Exception as e:
-        print(f"[unload_model] Failed to stop: {e}", flush=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to stop model: {e}",
-        )
-
-
-@router.get("/backends", summary="List available LLM backends")
-async def list_backends(cfg_mgr: ConfigManager = Depends(get_config_mgr)):
-    from ..plugins.backend_registry import list_all_available_backends
-    cfg = cfg_mgr.get_global()
-    results = list_all_available_backends(
-        user_llama_dir=cfg.get("llama_backend_dir", ""),
-        user_server_exe=cfg.get("llama_server_exe", ""),
-    )
-    return {"backends": [{
-        "kind": b.kind, "label": b.label,
-        "server_path": b.server_path, "available": b.available,
-        "gpu_devices": b.gpu_devices, "root_dir": b.root_dir,
-    } for b in results]}
-
-
-@router.post("/{family}/load", summary="Start LLM backend with this model")
-async def load_model(
-    family: str,
-    request: Request,
-    body: LoadModelBody = None,
-    cfg_mgr: ConfigManager = Depends(get_config_mgr),
-    registry: ModelRegistry = Depends(get_model_registry),
-    lifecycle: PluginLifecycleManager = Depends(get_lifecycle_mgr),
-    plugin_registry=Depends(get_plugin_registry),
-    _auth: None = auth_dep,
-):
-    """Start llama-server with the specified model (fully automated)."""
-    from ..plugins.lifecycle import PluginStatus
-    
-    print(f"[load_model] ENTRY: family={family}, body={body}", flush=True)
-    print(f"[load_model] current_user: {getattr(request.state, "current_user", None)}", flush=True)
-    
-    # Check if model is already running
-    existing_inst = lifecycle.get_instance(family)
-    if existing_inst and existing_inst.status == PluginStatus.RUNNING:
-        return {"ok": True, "instance": existing_inst.to_dict(), "note": "Already running"}
-
-    cfg = cfg_mgr.get_global()
-    
-    # Determine port
-    port = body.port if body and body.port else cfg.get("default_port_range", [8080, 8099])[0]
-
-    # Check if this is a pure plugin model (like ollama) that doesn't need llama-server.
-    # Pure plugin models have no model_path in their manifest; GGUF models do.
-    is_pure_plugin = False
-    if family == "ollama":
-        is_pure_plugin = True
-    
-    if is_pure_plugin:
-        print(f"[load_model] Starting Ollama plugin model", flush=True)
-        try:
-            instance = lifecycle.start_plugin(
-                plugin_name=family,
-                plugin_type="model",
-                command=[],  # Plugin models don't need subprocess commands
-                host=cfg.get("default_host", "127.0.0.1"),
-                port=port,
-                health_endpoint="/health",
-            )
-            return {"ok": True, "instance": instance.to_dict()}
-        except Exception as e:
-            print(f"[load_model] Failed to start plugin model: {e}", flush=True)
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to start plugin model: {e}",
-            )
-
-    # For all other models (GGUF), use the original llama-server logic.
-    # Since ModelRegistry.scan() is empty, we look up via plugin_registry instead.
-    info = None
-    if plugin_registry:
-        for desc in plugin_registry.list_plugins(type="model"):
-            if desc.manifest.model and desc.manifest.model.model_family == family:
-                info = desc.manifest.model
-                break
-    
-    if not info or not getattr(info, "model_path", ""):
-        raise HTTPException(status_code=404, detail=f"Model '{family}' not found")
-
-    # Find backend
-    from ..plugins.backend_registry import detect_backend
-    backend = detect_backend(
-        user_llama_dir=cfg.get("llama_backend_dir", ""),
-        user_server_exe=cfg.get("llama_server_exe", ""),
-        preference=cfg.get("backend_preference", "auto"),
-    )
-    if not backend.available or not backend.server_path:
-        raise HTTPException(status_code=500, detail="No backend available")
-
-    # Build command using plugin manifest data directly (bypass broken ModelRegistry)
-    from ..plugins.model_registry import DEFAULT_PARAMS, FAMILY_PARAMS
-    
-    # Map internal param names to llama-server CLI arg names
-    _CLI_ARG_MAP = {
-        "ngl": "--n-gpu-layers",
-        "ctx": "--ctx-size",
-        "batch": "--batch-size",
-        "ubatch": "--ubatch-size",
-        "threads": "--threads",
-        "cache_type_k": "--cache-type-k",
-        "cache_type_v": "--cache-type-v",
-        "flash_attn": "--flash-attn",
-        "mmap": "--mmap",
-        "mlock": "--mlock",
-        "parallel": "--parallel",
-        "cont_batching": "--cont-batching",
-        "temp": "--temperature",
-        "top_k": "--top-k",
-        "top_p": "--top-p",
-        "min_p": "--min-p",
-        "repeat_penalty": "--repeat-last-n",
-        "presence_penalty": "--presence-penalty",
-        "frequency_penalty": "--frequency-penalty",
-        "mirostat": "--mirostat",
-        "mirostat_tau": "--mirostat-tau",
-        "mirostat_eta": "--mirostat-eta",
-        "spec_type": "--spec-type",
-        "spec_draft_n_max": "--draft-n-max",
-        "spec_draft_type_k": "--draft-cache-type-k",
-        "spec_draft_type_v": "--draft-cache-type-v",
+def _to_model_dict(endpoint) -> Dict:
+    spec = endpoint.spec
+    return {
+        "family": endpoint.name,
+        "display": endpoint.name,
+        "provider": spec.kind.value,
+        "host": endpoint.host,
+        "port": endpoint.port,
+        "model_path": spec.model_path,
+        "model_name": spec.model_name,
+        "status": endpoint.status.value,
+        "pid": endpoint.pid,
+        "params": spec.params,
+        "instance": endpoint.to_dict(),
     }
-    
-    params = dict(DEFAULT_PARAMS)
-    for fam_key, overrides in FAMILY_PARAMS.items():
-        if info.model_family.startswith(fam_key):
-            params.update(overrides)
-    params["ngl"] = cfg.get("gpu_layers", params["ngl"])
-    params["ctx"] = cfg.get("ctx_size", params.get("ctx", 32768))
-    
-    # Build args manually since ModelRegistry is empty
-    model_path = info.model_path
-    args = [backend.server_path, "--model", model_path, "--port", str(port)]
-    # Only pass core params that are always valid; skip optional/spec-decoding params
-    _CORE_PARAMS = {"ngl", "ctx", "batch", "ubatch", "threads", "temp", "top_k", "top_p"}
-    
-    mirostat_mode = params.get("mirostat", 0)
-    
-    for k, v in params.items():
-        if v is None or v == "" or k not in _CORE_PARAMS:
-            continue
-        
-        cli_key = _CLI_ARG_MAP.get(k, f"--{k.replace('_', '-')}")
-        
-        # Convert integer-only params to int
-        if isinstance(v, float):
-            try:
-                v = int(v)
-            except (ValueError, TypeError):
-                pass
-        
-        args.extend([cli_key, str(v)])
 
-    print(f"[load_model] Generated llama-server command for {family}: {' '.join(args)}", flush=True)
 
-    # Check if already running (GGUF model)
+@router.get("", summary="List all configured model endpoints")
+async def list_models(request: Request, _auth: None = auth_dep):
+    manager = _get_manager(request)
+    models = [_to_model_dict(e) for e in manager.list_endpoints()]
+    return {"models": models}
+
+
+@router.post("/scan", summary="Re-read provider config / rediscover endpoints")
+async def scan_models(request: Request, _auth: None = auth_dep):
+    manager = _get_manager(request)
+    manager.update_providers(manager.get_config().get("providers", {}))
+    models = [_to_model_dict(e) for e in manager.list_endpoints()]
+    return {"models": models}
+
+
+@router.get("/{family}", summary="Get model endpoint info")
+async def get_model(family: str, request: Request):
+    manager = _get_manager(request)
+    endpoint = manager.get_endpoint(family)
+    if not endpoint:
+        raise HTTPException(status_code=404, detail="Model not found")
+    return _to_model_dict(endpoint)
+
+
+@router.get("/{family}/params", summary="Get sampling/launch params for an endpoint")
+async def get_model_params(family: str, request: Request):
+    manager = _get_manager(request)
+    endpoint = manager.get_endpoint(family)
+    if not endpoint:
+        raise HTTPException(status_code=404, detail="Model not found")
+    return {"family": family, "params": endpoint.spec.params}
+
+
+@router.post("/{family}/load", summary="Start model backend")
+async def load_model(family: str, request: Request, body: LoadModelBody = None,
+                     _auth: None = auth_dep):
+    manager = _get_manager(request)
     try:
-        import subprocess, psutil
-        result = subprocess.run(
-            ["netstat", "-ano"],
-            capture_output=True, text=True, timeout=5,
-        )
-        for line in result.stdout.split("\n"):
-            if "LISTENING" in line.upper() and f":{port} " in line:
-                parts = line.split()
-                if len(parts) >= 5:
-                    pid_running = parts[-1].strip()
-                    try:
-                        proc = psutil.Process(int(pid_running))
-                        if "llama-server" in proc.name().lower():
-                            from ..plugins.lifecycle import PluginStatus, PluginInstance
-                            inst = lifecycle.get_instance(family)
-                            if inst:
-                                # Instance exists in registry and process is alive on the port
-                                return {"ok": True, "instance": inst.to_dict(), "note": "Already running (port in use)"}
-                            # Process is alive on the port but no registry entry —
-                            # this means the old instance was not properly cleaned up
-                            # (e.g. launcher PID killed but llama-server child survived).
-                            # Register the surviving process so the frontend sees it,
-                            # then return it instead of trying to start a duplicate.
-                            inst = PluginInstance(
-                                plugin_name=family,
-                                plugin_type="model",
-                                pid=int(pid_running),
-                                process=None,
-                                port=port,
-                                status=PluginStatus.RUNNING,
-                                health_endpoint="/health",
-                            )
-                            lifecycle._instances[family] = inst
-                            return {"ok": True, "instance": inst.to_dict(), "note": "Already running (port in use)"}
-                    except Exception:
-                        pass
-    except Exception as e:
-        print(f"[load_model] Error checking process: {e}", flush=True)
+        endpoint = await manager.start(family)
+        return {"ok": True, "instance": endpoint.to_dict()}
+    except GatewayError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
 
-    # Not running — start it automatically using lifecycle manager
-    print(f"[load_model] Starting model on port {port}", flush=True)
+
+@router.post("/{family}/unload", summary="Stop model backend")
+async def unload_model(family: str, request: Request, _auth: None = auth_dep):
+    manager = _get_manager(request)
     try:
-        instance = lifecycle.start_plugin(
-            plugin_name=family,
-            plugin_type="model",
-            command=args,
-            host=cfg.get("default_host", "127.0.0.1"),
-            port=port,
-            health_endpoint="/health",
-        )
-        return {"ok": True, "instance": instance.to_dict()}
-    except Exception as e:
-        print(f"[load_model] Failed to start: {e}", flush=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to start model: {e}",
-        )
+        endpoint = await manager.stop(family)
+        return {"ok": True, "instance": endpoint.to_dict()}
+    except GatewayError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.message)
 
 
-@router.post("/{family}/disable", summary="Disable a model (prevent auto-loading)")
-async def disable_model(
-    family: str,
-    request: Request,
-    cfg_mgr: ConfigManager = Depends(get_config_mgr),
-    _auth: None = auth_dep,
-):
-    """Disable a model so it won't be loaded automatically."""
-    print(f"[disable_model] Disabling {family}", flush=True)
-    try:
-        # Get existing config to preserve other settings
-        existing_config = cfg_mgr.get_model_config(family)
-        if existing_config and "params" in existing_config:
-            # Update the params directly
-            existing_config["params"]["disabled"] = True
-            cfg_mgr.save_model_config(family, existing_config["params"])
-        else:
-            # Save model config with disabled flag
-            cfg_mgr.save_model_config(family, {"disabled": True})
-        return {"ok": True, "message": f"Model {family} disabled"}
-    except Exception as e:
-        print(f"[disable_model] Failed: {e}", flush=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to disable model: {e}",
-        )
+@router.get("/backends", summary="List available provider kinds")
+async def list_backends(request: Request):
+    manager = _get_manager(request)
+    return {"backends": [
+        {"kind": k, "label": k, "available": True}
+        for k in ("llamacpp", "vllm", "sglang")
+    ]}
 
 
-@router.post("/{family}/enable", summary="Enable a disabled model")
-async def enable_model(
-    family: str,
-    request: Request,
-    cfg_mgr: ConfigManager = Depends(get_config_mgr),
-    _auth: None = auth_dep,
-):
-    """Enable a previously disabled model."""
-    print(f"[enable_model] Enabling {family}", flush=True)
-    try:
-        # Get existing config
-        existing_config = cfg_mgr.get_model_config(family)
-        if existing_config and "params" in existing_config:
-            # Remove disabled flag from params
-            if "disabled" in existing_config["params"]:
-                del existing_config["params"]["disabled"]
-            # Save updated params (not the full config)
-            cfg_mgr.save_model_config(family, existing_config["params"])
-        else:
-            # No existing config, just ensure no disabled config exists
-            cfg_mgr.save_model_config(family, {})
-        return {"ok": True, "message": f"Model {family} enabled"}
-    except Exception as e:
-        print(f"[enable_model] Failed: {e}", flush=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to enable model: {e}",
-        )
+@router.post("/{family}/disable", summary="Disable a model endpoint")
+async def disable_model(family: str, request: Request, _auth: None = auth_dep):
+    manager = _get_manager(request)
+    providers = manager.get_config().get("providers", {})
+    entry = providers.get(family, {})
+    entry["disabled"] = True
+    providers[family] = entry
+    manager.update_providers(providers)
+    return {"ok": True, "message": f"Model {family} disabled"}
+
+
+@router.post("/{family}/enable", summary="Enable a model endpoint")
+async def enable_model(family: str, request: Request, _auth: None = auth_dep):
+    manager = _get_manager(request)
+    providers = manager.get_config().get("providers", {})
+    entry = providers.get(family, {})
+    entry.pop("disabled", None)
+    providers[family] = entry
+    manager.update_providers(providers)
+    return {"ok": True, "message": f"Model {family} enabled"}
 
 
 @router.get("/{family}/status", summary="Get model status (disabled/enabled)")
-async def get_model_status(
-    family: str,
-    request: Request,
-    cfg_mgr: ConfigManager = Depends(get_config_mgr),
-    _auth: None = auth_dep,
-):
-    """Check if a model is disabled."""
-    try:
-        model_config = cfg_mgr.get_model_config(family)
-        plugin_config = cfg_mgr.get_plugin_config(family)
-        disabled = False
-        if model_config and model_config.get("params", {}).get("disabled", False):
-            disabled = True
-        if plugin_config and plugin_config.get("params", {}).get("disabled", False):
-            disabled = True
-        return {"family": family, "disabled": disabled}
-    except Exception as e:
-        print(f"[get_model_status] Failed: {e}", flush=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to get model status: {e}",
-        )
-
-
+async def get_model_status(family: str, request: Request, _auth: None = auth_dep):
+    manager = _get_manager(request)
+    providers = manager.get_config().get("providers", {})
+    entry = providers.get(family, {})
+    return {"family": family, "disabled": bool(entry.get("disabled", False))}
