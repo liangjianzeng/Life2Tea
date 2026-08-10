@@ -236,6 +236,25 @@ class StatsService:
     def _now_iso(self) -> str:
         return datetime.now().isoformat()
 
+    def record_token_usage(self, model_family: str, model_name: str,
+                           input_tokens: int, output_tokens: int,
+                           timestamp: str = None, key_id: int = None) -> int:
+        """Persist real per-request token usage into token_usage."""
+        if timestamp is None:
+            timestamp = self._now_iso()
+        conn = self.db.get_connection()
+        try:
+            cursor = conn.execute(
+                """INSERT INTO token_usage
+                   (key_id, model_family, model_name, input_tokens, output_tokens, timestamp)
+                   VALUES (?,?,?,?,?,?)""",
+                (key_id, model_family, model_name, input_tokens, output_tokens, timestamp),
+            )
+            conn.commit()
+            return cursor.lastrowid
+        finally:
+            conn.close()
+
     # ── Persistence ─────────────────────────────────────
 
     def _record_system_metrics(self, m: Dict[str, Any]):
@@ -291,28 +310,6 @@ class StatsService:
             return cursor.lastrowid
         finally:
             conn.close()
-
-    def record_token_usage(self, model_family: str, model_name: str,
-                           input_tokens: int, output_tokens: int,
-                           timestamp: str = None, key_id: int = None) -> int:
-        """Persist real per-request token usage into token_usage."""
-        if timestamp is None:
-            timestamp = self._now_iso()
-        conn = self.db.get_connection()
-        try:
-            cursor = conn.execute(
-                """INSERT INTO token_usage
-                   (key_id, model_family, model_name, input_tokens, output_tokens, timestamp)
-                   VALUES (?,?,?,?,?,?)""",
-                (key_id, model_family, model_name, input_tokens, output_tokens, timestamp),
-            )
-            conn.commit()
-            return cursor.lastrowid
-        finally:
-            conn.close()
-
-    def _now_iso(self) -> str:
-        return datetime.now().isoformat()
 
     # ── Dashboard & stats ───────────────────────────────
 
@@ -771,9 +768,13 @@ class StatsService:
         entry["total_prompt_tokens"] = prompt
         entry["total_predicted_tokens"] = pred
 
-        peak_tok, peak_prompt = StatsService._record_peak(port, tok_s, prompt_tok_s)
+        peak_tok, peak_prompt, _pk_ext = StatsService._record_peak(port, tok_s, prompt_tok_s)
         entry["tok_s_peak"] = peak_tok
         entry["prompt_tok_s_peak"] = peak_prompt
+        entry["tok_s_peak_hour"] = _pk_ext.get("tok_s_hour")
+        entry["tok_s_peak_day"] = _pk_ext.get("tok_s_day")
+        entry["prompt_tok_s_peak_hour"] = _pk_ext.get("prompt_tok_s_hour")
+        entry["prompt_tok_s_peak_day"] = _pk_ext.get("prompt_tok_s_day")
 
         StatsService._MODEL_METRICS_PREV[port] = {
             "ts": _now, "pred": pred, "pred_sec": pred_sec,
@@ -834,8 +835,50 @@ class StatsService:
             if _lp and _lp[1] > 0:
                 peak_prompt = _lp[1]
 
+        # ── 小时 / 当天峰值：最大值 + 到点重置（自然小时 / 自然日，简单做）──
+        import datetime as _dt
+        _lc = _dt.datetime.now()
+        hour_key = _lc.strftime("%Y-%m-%d-%H")
+        day_key = _lc.strftime("%Y-%m-%d")
+        _lt2 = p.get("last_tok_s")
+        _lp2 = p.get("last_prompt_tok_s")
+        _last_tok = _lt2[1] if _lt2 else None
+        _last_prompt = _lp2[1] if _lp2 else None
+
+        def _period(val_key, key_key, cur_key, newval, lastval):
+            if p.get(key_key) != cur_key:
+                seed = newval if (newval and newval > 0) else (lastval or 0.0)
+                p[key_key] = cur_key
+                p[val_key] = float(seed) if (seed and seed > 0) else None
+            elif newval and newval > 0:
+                p[val_key] = max(float(p.get(val_key) or 0.0), float(newval))
+            elif p.get(val_key) is None and lastval and lastval > 0:
+                p[val_key] = float(lastval)
+            return p.get(val_key)
+
+        tok_hour = _period("h_tok", "hk_tok", hour_key, tok_s, _last_tok)
+        tok_day = _period("d_tok", "dk_tok", day_key, tok_s, _last_tok)
+        prompt_hour = _period("h_prompt", "hk_prompt", hour_key, prompt_tok_s, _last_prompt)
+        prompt_day = _period("d_prompt", "dk_prompt", day_key, prompt_tok_s, _last_prompt)
+
+        # 级联收口：当前峰 -> 小时峰 -> 当天峰，保证 日峰 >= 时峰 >= 当前峰。
+        # 否则冷启动时 300s 滚动窗口里的旧样本会高于刚起头的小时峰，看着很怪。
+        def _cascade(val_key, base):
+            cur = p.get(val_key)
+            if base is not None and base > 0 and (cur is None or base > cur):
+                p[val_key] = float(base)
+            return p.get(val_key)
+
+        tok_hour = _cascade("h_tok", peak_tok)
+        tok_day = _cascade("d_tok", tok_hour)
+        prompt_hour = _cascade("h_prompt", peak_prompt)
+        prompt_day = _cascade("d_prompt", prompt_hour)
+
         cls._save_peak_store(store)
-        return peak_tok, peak_prompt
+        return peak_tok, peak_prompt, {
+            "tok_s_hour": tok_hour, "tok_s_day": tok_day,
+            "prompt_tok_s_hour": prompt_hour, "prompt_tok_s_day": prompt_day,
+        }
 
     @classmethod
     def _load_peak_store(cls):
@@ -1081,11 +1124,15 @@ class StatsService:
                             entry["tok_s"] = _pr.get("tok_s") or 0.0
                         if not entry.get("prompt_tok_s"):
                             entry["prompt_tok_s"] = _pr.get("prompt_tok_s") or 0.0
-                        pk_tok, pk_prompt = StatsService._record_peak(
+                        pk_tok, pk_prompt, _pk_ext = StatsService._record_peak(
                             port, _pr.get("tok_s"), _pr.get("prompt_tok_s")
                         )
                         entry["tok_s_peak"] = pk_tok
                         entry["prompt_tok_s_peak"] = pk_prompt
+                        entry["tok_s_peak_hour"] = _pk_ext.get("tok_s_hour")
+                        entry["tok_s_peak_day"] = _pk_ext.get("tok_s_day")
+                        entry["prompt_tok_s_peak_hour"] = _pk_ext.get("prompt_tok_s_hour")
+                        entry["prompt_tok_s_peak_day"] = _pk_ext.get("prompt_tok_s_day")
                         StatsService._MTP_CACHE[port] = {
                             "ts": time.time(), "mtp": dict(entry["mtp"]), "pid": pid,
                         }

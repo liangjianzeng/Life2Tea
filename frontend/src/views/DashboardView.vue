@@ -194,18 +194,22 @@
             <span class="mc-tps-unit">tok/s</span>
             <span class="mc-peak-tag">峰值</span>
           </div>
+          <div class="mc-peaks" v-if="(s.tok_s_peak_hour != null || s.tok_s_peak_day != null) && s.tok_s == null">
+            <span v-if="s.tok_s_peak_hour != null">时峰 {{ s.tok_s_peak_hour.toFixed(1) }}</span>
+            <span v-if="s.tok_s_peak_day != null">日峰 {{ s.tok_s_peak_day.toFixed(1) }}</span>
+          </div>
           <div class="mc-sub">
             <span v-if="s.spec && s.spec.enabled" class="mc-mtp" :title="specTitle(s)">{{ s.spec.label }} 开<span v-if="s.mtp && s.mtp.acceptance != null"> {{ (s.mtp.acceptance * 100).toFixed(0) }}%</span></span>
             <span v-else class="mc-mtp-off">投机 关</span>
             <span class="mc-mem" v-if="s.rss_memory_bytes">{{ (s.rss_memory_bytes / 1073741824).toFixed(1) }} GB</span>
-            <span class="mc-cur" v-if="s.tok_s != null">现 {{ s.tok_s.toFixed(1) }}</span>
+            <span class="mc-cur" v-if="s.tok_s != null">现 {{ s.tok_s.toFixed(1) }}<span v-if="s.tok_s_peak_hour != null" class="mc-peak-inline"> 时峰 {{ s.tok_s_peak_hour.toFixed(1) }}</span><span v-if="s.tok_s_peak_day != null" class="mc-peak-inline"> 日峰 {{ s.tok_s_peak_day.toFixed(1) }}</span></span>
           </div>
           <div class="mc-foot mc-cum" v-if="s.total_prompt_tokens != null || s.total_predicted_tokens != null">
             <span v-if="s.total_prompt_tokens != null">累计入 {{ formatTokens(s.total_prompt_tokens) }}</span>
             <span v-if="s.total_predicted_tokens != null">累计出 {{ formatTokens(s.total_predicted_tokens) }}</span>
           </div>
           <div class="mc-foot" v-if="(s.prompt_tok_s_peak != null) || (s.kv_cache_used != null && s.kv_cache_total)">
-            <span v-if="s.prompt_tok_s_peak != null">预填充 峰值{{ s.prompt_tok_s_peak.toFixed(0) }}/s<span v-if="s.prompt_tok_s != null" class="mc-cur-inline"> 现{{ s.prompt_tok_s.toFixed(0) }}</span></span>
+            <span v-if="s.prompt_tok_s_peak != null">预填充 峰值{{ s.prompt_tok_s_peak.toFixed(0) }}/s<span v-if="s.prompt_tok_s_peak_hour != null"> 时{{ s.prompt_tok_s_peak_hour.toFixed(0) }}</span><span v-if="s.prompt_tok_s_peak_day != null"> 日{{ s.prompt_tok_s_peak_day.toFixed(0) }}</span><span v-if="s.prompt_tok_s != null" class="mc-cur-inline"> 现{{ s.prompt_tok_s.toFixed(0) }}</span></span>
             <span v-if="s.kv_cache_used != null && s.kv_cache_total">KV {{ (s.kv_cache_used / s.kv_cache_total * 100).toFixed(0) }}%</span>
           </div>
         </div>
@@ -1014,6 +1018,19 @@ onUnmounted(() => {
   align-items: baseline;
   gap: 6px;
   margin: 2px 0;
+}
+
+.mc-peak-inline {
+  color: #7a8699;
+  margin-left: 4px;
+}
+
+.mc-peaks {
+  display: flex;
+  gap: 10px;
+  font-size: 0.68em;
+  color: #7a8699;
+  margin: -1px 0 2px;
 }
 
 .mc-peak-tag {
