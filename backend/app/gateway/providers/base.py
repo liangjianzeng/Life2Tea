@@ -20,6 +20,67 @@ class ProviderKind(str, Enum):
     SGLANG = "sglang"
 
 
+
+# Field schema per provider kind — drives the frontend's field-based config form
+# (instead of a generic key/value editor). "core" fields are the top-level
+# provider attributes; "params" are the sampling/launch parameters passed
+# through to the backend launch command (see *_PARAM_TO_FLAG mappings).
+PROVIDER_SCHEMA = {
+    "llamacpp": {
+        "core": [
+            {"key": "model_path", "label": "Model Path", "type": "path", "required": True, "default": ""},
+            {"key": "host", "label": "Host", "type": "text", "required": False, "default": "127.0.0.1"},
+            {"key": "port", "label": "Port", "type": "number", "required": True, "default": 8080},
+        ],
+        "params": [
+            {"key": "ctx_size", "label": "Context Size", "type": "number", "default": 32768},
+            {"key": "n_gpu_layers", "label": "GPU Layers", "type": "number", "default": 99},
+            {"key": "threads", "label": "Threads", "type": "number", "default": ""},
+            {"key": "batch_size", "label": "Batch Size", "type": "number", "default": ""},
+            {"key": "parallel", "label": "Parallel", "type": "number", "default": ""},
+            {"key": "top_k", "label": "Top K", "type": "number", "default": ""},
+            {"key": "top_p", "label": "Top P", "type": "number", "default": ""},
+            {"key": "temperature", "label": "Temperature", "type": "number", "default": ""},
+            {"key": "repeat_penalty", "label": "Repeat Penalty", "type": "number", "default": ""},
+            {"key": "flash_attn", "label": "Flash Attention", "type": "boolean", "default": False},
+            {"key": "mlock", "label": "Mlock", "type": "boolean", "default": False},
+            {"key": "mmap", "label": "Mmap", "type": "boolean", "default": True},
+        ],
+    },
+    "vllm": {
+        "core": [
+            {"key": "model_name", "label": "Model Name", "type": "text", "required": True, "default": ""},
+            {"key": "host", "label": "Host", "type": "text", "required": False, "default": "127.0.0.1"},
+            {"key": "port", "label": "Port", "type": "number", "required": True, "default": 8080},
+        ],
+        "params": [
+            {"key": "max_model_len", "label": "Max Model Length", "type": "number", "default": 32768},
+            {"key": "gpu_memory_utilization", "label": "GPU Memory Utilization", "type": "number", "default": 0.85},
+            {"key": "dtype", "label": "Dtype", "type": "text", "default": ""},
+            {"key": "tensor_parallel_size", "label": "Tensor Parallel Size", "type": "number", "default": ""},
+            {"key": "enforce_eager", "label": "Enforce Eager", "type": "boolean", "default": False},
+            {"key": "max_num_seqs", "label": "Max Num Seqs", "type": "number", "default": ""},
+            {"key": "served_model_name", "label": "Served Model Name", "type": "text", "default": ""},
+        ],
+    },
+    "sglang": {
+        "core": [
+            {"key": "model_name", "label": "Model Name", "type": "text", "required": True, "default": ""},
+            {"key": "host", "label": "Host", "type": "text", "required": False, "default": "127.0.0.1"},
+            {"key": "port", "label": "Port", "type": "number", "required": True, "default": 8080},
+        ],
+        "params": [
+            {"key": "max_model_len", "label": "Max Model Length", "type": "number", "default": 32768},
+            {"key": "mem_fraction_static", "label": "Mem Fraction Static", "type": "number", "default": ""},
+            {"key": "tp_size", "label": "TP Size", "type": "number", "default": ""},
+            {"key": "dtype", "label": "Dtype", "type": "text", "default": ""},
+            {"key": "quant", "label": "Quant", "type": "text", "default": ""},
+            {"key": "enable_mixed_quant", "label": "Enable Mixed Quant", "type": "boolean", "default": False},
+        ],
+    },
+}
+
+
 class EndpointStatus(str, Enum):
     STOPPED = "stopped"
     STARTING = "starting"

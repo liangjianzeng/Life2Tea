@@ -110,6 +110,29 @@ class ProviderManager:
         self._config["routing"] = routing
         self._save_config()
 
+    def remove_provider(self, name: str) -> None:
+        """Remove a provider config entry, its endpoint, and routing references."""
+        providers = self._config.get("providers", {})
+        if name not in providers:
+            return
+        providers.pop(name)
+        self._config["providers"] = providers
+        # Kill any running process and drop the stale endpoint from memory
+        # (_discover() only adds/updates endpoints, never removes).
+        endpoint = self._endpoints.pop(name, None)
+        if endpoint is not None and endpoint.pid:
+            self._kill_process(endpoint)
+        # Clean routing rule references to the removed model.
+        routing = self._config.get("routing", {})
+        changed = False
+        for key, chain in routing.items():
+            if isinstance(chain, list) and name in chain:
+                routing[key] = [m for m in chain if m != name]
+                changed = True
+        if changed:
+            self._config["routing"] = routing
+        self._save_config()
+
     def get_routing(self) -> Dict[str, list]:
         return self._config.get("routing", {})
 
@@ -136,8 +159,14 @@ class ProviderManager:
                 existing = self._endpoints.get(name)
                 if existing:
                     existing.spec = spec
+                    # Keep endpoint host/port in sync with spec (used by the
+                    # provider client and the API list endpoint).
+                    existing.host = spec.host
+                    existing.port = spec.port
                 else:
-                    self._endpoints[name] = ModelEndpoint(name=name, spec=spec)
+                    self._endpoints[name] = ModelEndpoint(
+                        name=name, spec=spec, host=spec.host, port=spec.port,
+                    )
 
     def list_endpoints(self) -> List[ModelEndpoint]:
         with self._lock:

@@ -45,6 +45,7 @@ export interface ModelEndpoint {
   model_name: string;
   status: EndpointStatus;
   pid: number;
+  disabled?: boolean;
   params: Record<string, unknown>;
   instance?: {
     name: string;
@@ -54,6 +55,34 @@ export interface ModelEndpoint {
     status: EndpointStatus;
     pid: number;
   } | null;
+}
+
+
+// ── Model configuration (field-based form) ──────────────
+export type FieldType = "text" | "number" | "boolean" | "path";
+
+export interface ProviderField {
+  key: string;
+  label: string;
+  type: FieldType;
+  required?: boolean;
+  default?: unknown;
+}
+
+export interface ProviderSchema {
+  core: ProviderField[];
+  params: ProviderField[];
+}
+
+export interface ModelConfig {
+  provider: ProviderKind;
+  model_path?: string;
+  model_name?: string;
+  host?: string;
+  port?: number;
+  launch_cmd?: string[];
+  params: Record<string, unknown>;
+  disabled?: boolean;
 }
 
 // ── Metrics / Dashboard ───────────────────────────────────

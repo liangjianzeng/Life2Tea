@@ -3,20 +3,25 @@
     <div class="models-header">
       <h2>{{ t("models.title") }}</h2>
       <div class="header-actions">
+        <button @click="openNew" class="btn-add">{{ t("models.add") }}</button>
         <button @click="scan" :disabled="scanning" class="btn-scan">
           {{ scanning ? t("models.scanning") : t("models.scan") }}
         </button>
       </div>
     </div>
+
     <div v-if="providers.length" class="models-list">
       <div v-for="m in providers" :key="m.family" class="model-card">
         <div class="model-info">
           <strong class="model-name">{{ m.display }}</strong>
           <span class="model-meta">{{ m.provider }} · :{{ m.port }}</span>
-          <span v-if="m.status === 'running'" class="model-status running">
-            {{ t("models.running", { port: m.port }) }}
-          </span>
-          <span v-else class="model-status stopped">{{ t("models.stopped") }}</span>
+          <div class="status-row">
+            <span v-if="m.disabled" class="model-disabled">{{ t("models.disabledTag") }}</span>
+            <span v-if="m.status === 'running'" class="model-status running">
+              {{ t("models.running", { port: m.port }) }}
+            </span>
+            <span v-else class="model-status stopped">{{ t("models.stopped") }}</span>
+          </div>
         </div>
         <div class="model-actions">
           <button
@@ -35,9 +40,14 @@
           >
             {{ loadingModel === m.family ? t("models.unloading") : t("models.unload") }}
           </button>
-          <button @click="showConfig(m)" class="btn-config">
-            ⚙️ {{ t("models.config") }}
+          <button v-if="m.disabled" @click="toggleDisable(m)" class="btn-enable">
+            {{ t("models.enable") }}
           </button>
+          <button v-else @click="toggleDisable(m)" class="btn-disable">
+            {{ t("models.disable") }}
+          </button>
+          <button @click="showConfig(m)" class="btn-config">⚙️ {{ t("models.config") }}</button>
+          <button @click="removeModel(m)" class="btn-danger">{{ t("models.delete") }}</button>
         </div>
       </div>
     </div>
@@ -45,27 +55,77 @@
       <p>{{ t("models.none") }}</p>
       <p class="hint">{{ t("models.hint") }}</p>
     </div>
-    <!-- Provider Params Modal (generic key/value editor) -->
+
+    <!-- Provider Config Modal (field-based form) -->
     <div v-if="showConfigModal" class="modal-overlay" @click.self="closeConfig">
       <div class="modal-content config-modal">
         <div class="modal-header">
-          <h3>{{ t("models.configTitle", { model: selectedModel?.display }) }}</h3>
+          <h3>{{ isNew ? t("models.addTitle") : t("models.configTitle", { model: editingModel?.display }) }}</h3>
           <button class="modal-close" @click="closeConfig">&times;</button>
         </div>
         <div class="modal-body">
-          <p class="mtp-description"><p>{{ t("models.configHint") }}</p></p>
           <div class="config-section">
-            <div v-for="(v, k) in modelConfig" :key="k" class="form-group">
-              <label>{{ k }}</label>
-              <input v-if="typeof v === 'boolean'"
-                     type="checkbox" :checked="modelConfig[k]" @change="modelConfig[k] = !modelConfig[k]" />
-              <input v-else-if="typeof v === 'number'"
-                     v-model.number="modelConfig[k]" type="number" step="any" />
-              <input v-else v-model="modelConfig[k]" type="text" />
+            <h4>{{ t("models.configBasic") }}</h4>
+            <div class="form-group">
+              <label>{{ t("models.family") }}</label>
+              <input v-model="form.family" type="text" :disabled="!isNew" />
+            </div>
+            <div class="form-group">
+              <label>{{ t("models.provider") }}</label>
+              <select v-model="form.provider" @change="applyProviderSchema">
+                <option v-for="b in backends" :key="b.kind" :value="b.kind">{{ b.label }}</option>
+              </select>
+            </div>
+            <div v-for="f in currentSchema.core" :key="f.key" class="form-group">
+              <label>{{ f.label }}<span v-if="f.required" class="required">*</span></label>
+              <template v-if="f.type === 'path'">
+                <div class="path-row">
+                  <input v-model="form[f.key]" type="text" />
+                  <button class="btn-preset" @click="openPathPicker(f.key)">{{ t("models.browse") }}</button>
+                </div>
+              </template>
+              <input v-else-if="f.type === 'number'" v-model.number="form[f.key]" type="number" />
+              <input v-else v-model="form[f.key]" type="text" />
+            </div>
+            <div class="form-group">
+              <label>{{ t("models.disabled") }}</label>
+              <input v-model="form.disabled" type="checkbox" />
             </div>
           </div>
+
           <div class="config-section">
-            <h4>{{ t("models.configAdd") }}</h4>
+            <h4>{{ t("models.configParams") }}</h4>
+            <div v-for="f in currentSchema.params" :key="f.key" class="form-group">
+              <label>{{ f.label }}</label>
+              <input
+                v-if="f.type === 'boolean'"
+                type="checkbox"
+                :checked="!!schemaParams[f.key]"
+                @change="schemaParams[f.key] = !schemaParams[f.key]"
+              />
+              <input
+                v-else-if="f.type === 'number'"
+                v-model.number="schemaParams[f.key]"
+                type="number"
+                step="any"
+              />
+              <input v-else v-model="schemaParams[f.key]" type="text" />
+            </div>
+          </div>
+
+          <div class="config-section">
+            <h4>{{ t("models.configAdvanced") }}</h4>
+            <div v-for="(v, k) in customParams" :key="k" class="form-group param-row">
+              <label>{{ k }}</label>
+              <input
+                v-if="typeof v === 'boolean'"
+                type="checkbox"
+                :checked="v"
+                @change="customParams[k] = !customParams[k]"
+              />
+              <input v-else v-model="customParams[k]" type="text" />
+              <button class="btn-preset" @click="removeParam(k)">&times;</button>
+            </div>
             <div class="form-group">
               <label>{{ t("models.configAddKey") }}</label>
               <input v-model="newParamKey" type="text" placeholder="key" />
@@ -79,31 +139,215 @@
         </div>
         <div class="modal-footer">
           <button class="btn-cancel" @click="closeConfig">{{ t("settings.picker.cancel") }}</button>
-          <button class="btn-save" @click="saveModelConfig">{{ t("settings.save") }}</button>
+          <button class="btn-save" :disabled="saving" @click="saveConfig">
+            {{ saving ? t("models.saving") : t("settings.save") }}
+          </button>
         </div>
       </div>
     </div>
+
+    <PathPickerModal
+      v-model="showPathPicker"
+      title=""
+      :initial-path="form.model_path || ''"
+      :allow-file="true"
+      path-type="executable"
+      @select="onPathSelected"
+    />
   </div>
 </template>
+
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, computed, reactive, onMounted } from "vue";
 import { useI18n } from "vue-i18n";
 import { storeToRefs } from "pinia";
 import { useGatewayStore } from "../stores/gateway";
-import { getModelParams } from "../api/models";
-import type { ModelEndpoint } from "../types";
+import {
+  getModelParams, listBackends, createModel, updateModel, deleteModel,
+  disableModel, enableModel,
+} from "../api/models";
+import PathPickerModal from "../components/PathPickerModal.vue";
+import type { ModelEndpoint, ModelConfig, ProviderKind, ProviderSchema } from "../types";
 
 const { t } = useI18n();
 const store = useGatewayStore();
 const { providers } = storeToRefs(store);
 
 const scanning = ref(false);
+const saving = ref(false);
 const loadingModel = ref<string | null>(null);
 const showConfigModal = ref(false);
-const selectedModel = ref<ModelEndpoint | null>(null);
-const modelConfig = ref<Record<string, any>>({});
+const editingModel = ref<ModelEndpoint | null>(null);
+const backends = ref<{ kind: string; label: string; schema: ProviderSchema }[]>([]);
+const showPathPicker = ref(false);
+
+const form = reactive<Record<string, any>>({
+  family: "",
+  provider: "llamacpp",
+  host: "127.0.0.1",
+  port: 8080,
+  model_path: "",
+  model_name: "",
+  disabled: false,
+});
+
+const schemaParams = reactive<Record<string, any>>({});
+const customParams = reactive<Record<string, any>>({});
 const newParamKey = ref("");
 const newParamValue = ref("");
+
+const isNew = computed(() => !editingModel.value);
+const currentSchema = computed<ProviderSchema>(
+  () => backends.value.find((b) => b.kind === form.provider)?.schema || { core: [], params: [] },
+);
+
+async function loadBackends() {
+  try {
+    backends.value = await listBackends();
+  } catch {
+    backends.value = [];
+  }
+}
+
+function applyProviderSchema() {
+  const schema = currentSchema.value;
+  const np: Record<string, any> = {};
+  for (const f of schema.params) {
+    np[f.key] = f.default ?? "";
+  }
+  Object.keys(schemaParams).forEach((k) => delete schemaParams[k]);
+  Object.assign(schemaParams, np);
+}
+
+function openNew() {
+  editingModel.value = null;
+  Object.assign(form, {
+    family: "",
+    provider: "llamacpp",
+    host: "127.0.0.1",
+    port: 8080,
+    model_path: "",
+    model_name: "",
+    disabled: false,
+  });
+  Object.keys(customParams).forEach((k) => delete customParams[k]);
+  applyProviderSchema();
+  showConfigModal.value = true;
+}
+
+async function showConfig(m: ModelEndpoint) {
+  editingModel.value = m;
+  Object.assign(form, {
+    family: m.family,
+    provider: m.provider,
+    host: m.host,
+    port: m.port,
+    model_path: m.model_path,
+    model_name: m.model_name,
+    disabled: !!m.disabled,
+  });
+  Object.keys(customParams).forEach((k) => delete customParams[k]);
+  try {
+    const params = await getModelParams(m.family);
+    const schema = currentSchema.value;
+    const sp: Record<string, any> = {};
+    for (const f of schema.params) {
+      if (f.key in params) sp[f.key] = params[f.key];
+      else sp[f.key] = f.default ?? "";
+    }
+    Object.keys(schemaParams).forEach((k) => delete schemaParams[k]);
+    Object.assign(schemaParams, sp);
+    for (const [k, v] of Object.entries(params)) {
+      if (!(k in sp)) customParams[k] = v;
+    }
+  } catch {
+    applyProviderSchema();
+  }
+  showConfigModal.value = true;
+}
+
+function closeConfig() {
+  showConfigModal.value = false;
+  editingModel.value = null;
+}
+
+function openPathPicker(fieldKey: string) {
+  showPathPicker.value = true;
+}
+
+function onPathSelected(path: string) {
+  form.model_path = path;
+}
+
+function addParam() {
+  const key = newParamKey.value.trim();
+  if (!key) return;
+  const raw = newParamValue.value.trim();
+  let val: any = raw;
+  if (/^-?\d+$/.test(raw)) val = parseInt(raw, 10);
+  else if (/^-?\d+\.\d+$/.test(raw)) val = parseFloat(raw);
+  else if (raw === "true") val = true;
+  else if (raw === "false") val = false;
+  customParams[key] = val;
+  newParamKey.value = "";
+  newParamValue.value = "";
+}
+
+function removeParam(key: string) {
+  delete customParams[key];
+}
+
+async function saveConfig() {
+  if (isNew.value && !form.family.trim()) {
+    alert(t("models.errorFamilyRequired"));
+    return;
+  }
+  saving.value = true;
+  try {
+    const params = { ...schemaParams, ...customParams };
+    const config: ModelConfig = {
+      provider: form.provider,
+      host: form.host,
+      port: form.port,
+      params,
+    };
+    if (form.model_path) config.model_path = form.model_path;
+    if (form.model_name) config.model_name = form.model_name;
+    if (form.disabled) config.disabled = true;
+    if (isNew.value) {
+      await createModel(form.family.trim(), config);
+    } else {
+      await updateModel(editingModel.value!.family, config);
+    }
+    closeConfig();
+    await store.refresh();
+    alert(t("models.configSaved"));
+  } catch (e: any) {
+    alert(t("models.configError") + (e?.message ? `: ${e.message}` : ""));
+  } finally {
+    saving.value = false;
+  }
+}
+
+async function removeModel(m: ModelEndpoint) {
+  if (!confirm(t("models.confirmDelete", { name: m.display }))) return;
+  try {
+    await deleteModel(m.family);
+    await store.refresh();
+  } catch (e: any) {
+    alert(t("models.errorDelete", { msg: e?.message }));
+  }
+}
+
+async function toggleDisable(m: ModelEndpoint) {
+  try {
+    if (m.disabled) await enableModel(m.family);
+    else await disableModel(m.family);
+    await store.refresh();
+  } catch (e: any) {
+    alert(t("models.errorToggle", { msg: e?.message }));
+  }
+}
 
 async function scan() {
   scanning.value = true;
@@ -139,79 +383,13 @@ async function unloadModel(m: ModelEndpoint) {
   }
 }
 
-async function refresh() {
-  await store.refresh();
-}
-
-async function showConfig(m: ModelEndpoint) {
-  selectedModel.value = m;
-  showConfigModal.value = true;
-  newParamKey.value = "";
-  newParamValue.value = "";
-  try {
-    const params = await getModelParams(m.family);
-    modelConfig.value = { ...params };
-  } catch {
-    modelConfig.value = {};
-  }
-}
-
-function closeConfig() {
-  showConfigModal.value = false;
-  selectedModel.value = null;
-}
-
-function addParam() {
-  const key = newParamKey.value.trim();
-  if (!key) return;
-  const raw = newParamValue.value.trim();
-  let val: any = raw;
-  if (/^-?\d+$/.test(raw)) val = parseInt(raw, 10);
-  else if (/^-?\d+\.\d+$/.test(raw)) val = parseFloat(raw);
-  else if (raw === "true") val = true;
-  else if (raw === "false") val = false;
-  modelConfig.value[key] = val;
-  newParamKey.value = "";
-  newParamValue.value = "";
-}
-
-async function saveModelConfig() {
-  if (!selectedModel.value) return;
-  try {
-    const res = await fetch(`/api/models/${selectedModel.value.family}/params`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ params: modelConfig.value }),
-      credentials: "include",
-    });
-    if (res.ok) {
-      closeConfig();
-      await store.refresh();
-      alert(t("models.configSaved"));
-    } else {
-      alert(t("models.configError"));
-    }
-  } catch (e) {
-    alert(t("models.configError"));
-  }
-}
-
-onMounted(scan);
+onMounted(() => {
+  loadBackends();
+  scan();
+});
 </script>
+
 <style scoped>
-.ctx-input-wrap {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.ctx-input-wrap input {
-  width: 80px;
-}
-.ctx-unit {
-  color: #888;
-  font-size: 14px;
-  font-weight: 500;
-}
 .models-view {
   max-width: 800px;
   margin: 0 auto;
@@ -235,14 +413,20 @@ onMounted(scan);
   display: flex;
   gap: 8px;
 }
+.btn-add,
 .btn-scan {
   padding: 6px 16px;
-  background: #534ab7;
   color: #fff;
   border: none;
   border-radius: 4px;
   cursor: pointer;
   font-size: 0.9em;
+}
+.btn-add {
+  background: #4caf50;
+}
+.btn-scan {
+  background: #534ab7;
 }
 .btn-scan:disabled {
   opacity: 0.5;
@@ -278,6 +462,11 @@ onMounted(scan);
   font-size: 0.85em;
   opacity: 0.6;
 }
+.status-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
 .model-status {
   font-size: 0.8em;
   padding: 2px 8px;
@@ -298,34 +487,33 @@ onMounted(scan);
   border-radius: 4px;
   background: #555;
   color: #aaa;
-  margin-top: 2px;
   display: inline-block;
 }
 .model-actions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
-.btn-load {
-  padding: 6px 16px;
+.btn-load,
+.btn-enable {
+  padding: 6px 12px;
   background: #4caf50;
   color: #fff;
   border: none;
   border-radius: 4px;
   cursor: pointer;
-  font-size: 0.9em;
+  font-size: 0.85em;
 }
-.btn-load:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.btn-unload {
-  padding: 6px 16px;
+.btn-unload,
+.btn-danger {
+  padding: 6px 12px;
   background: #f44336;
   color: #fff;
   border: none;
   border-radius: 4px;
   cursor: pointer;
-  font-size: 0.9em;
+  font-size: 0.85em;
 }
 .btn-config {
   padding: 6px 12px;
@@ -334,10 +522,7 @@ onMounted(scan);
   border: none;
   border-radius: 4px;
   cursor: pointer;
-  font-size: 0.9em;
-}
-.btn-config:hover {
-  background: #6b5cc4;
+  font-size: 0.85em;
 }
 .btn-disable {
   padding: 6px 12px;
@@ -348,18 +533,11 @@ onMounted(scan);
   cursor: pointer;
   font-size: 0.85em;
 }
-.btn-enable {
-  padding: 6px 12px;
-  background: #4caf50;
-  color: #fff;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 0.9em;
-}
-.btn-enable:hover,
-.btn-disable:hover {
-  opacity: 0.9;
+.btn-load:disabled,
+.btn-unload:disabled,
+.btn-save:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .modal-overlay {
   position: fixed;
@@ -374,9 +552,9 @@ onMounted(scan);
   z-index: 1000;
 }
 .config-modal {
-  width: 600px;
+  width: 640px;
   max-width: 90%;
-  max-height: 80vh;
+  max-height: 85vh;
   overflow-y: auto;
   background: #1a1a2e;
   border: 1px solid #534ab7;
@@ -400,16 +578,22 @@ onMounted(scan);
   display: flex;
   align-items: center;
   margin-bottom: 10px;
+  gap: 8px;
 }
 .form-group label {
-  min-width: 140px;
+  min-width: 150px;
   font-size: 0.85em;
   color: #b0b0d0;
 }
+.required {
+  color: #f44336;
+  margin-left: 2px;
+}
 .form-group input[type="number"],
+.form-group input[type="text"],
 .form-group select {
   flex: 1;
-  max-width: 200px;
+  max-width: 280px;
   padding: 6px 10px;
   background: #1a1a2e;
   color: #e0e0ff;
@@ -417,56 +601,26 @@ onMounted(scan);
   border-radius: 4px;
   font-size: 0.9em;
 }
+.form-group input:disabled {
+  opacity: 0.5;
+}
 .form-group input:focus,
 .form-group select:focus {
   outline: none;
   border-color: #534ab7;
 }
-.checkbox-group {
+.path-row {
+  flex: 1;
+  max-width: 280px;
   display: flex;
-  align-items: center;
+  gap: 4px;
 }
-.checkbox-group label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-  min-width: auto;
+.path-row input {
+  flex: 1;
+  max-width: 220px;
 }
-.checkbox-group input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
-  cursor: pointer;
-}
-.preset-buttons {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.mtp-description {
-  margin-bottom: 15px;
-  padding: 10px;
-  background: #1a1a2e;
-  border: 1px solid #2d2d4a;
-  border-radius: 4px;
-}
-.mtp-description p {
-  margin: 0;
-  font-size: 0.85em;
-  color: #a0a0c0;
-  line-height: 1.4;
-}
-.mtp-params {
-  margin-top: 15px;
-  padding-top: 15px;
-  border-top: 1px dashed #2d2d4a;
-}
-.param-hint {
-  display: block;
-  margin-top: 4px;
-  font-size: 0.75em;
-  color: #666;
-  font-style: italic;
+.param-row label {
+  min-width: 120px;
 }
 .btn-preset {
   padding: 6px 12px;
@@ -498,9 +652,6 @@ onMounted(scan);
   cursor: pointer;
   font-size: 0.9em;
 }
-.btn-cancel:hover {
-  background: #3d3d5a;
-}
 .btn-save {
   padding: 8px 16px;
   background: #534ab7;
@@ -509,13 +660,6 @@ onMounted(scan);
   border-radius: 4px;
   cursor: pointer;
   font-size: 0.9em;
-}
-.btn-save:hover {
-  background: #6b5cc4;
-}
-.btn-unload:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 .empty-state {
   flex: 1;
@@ -529,11 +673,5 @@ onMounted(scan);
 .hint {
   font-size: 0.9em;
   max-width: 400px;
-}
-code {
-  background: #2d2d4a;
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-size: 0.9em;
 }
 </style>
