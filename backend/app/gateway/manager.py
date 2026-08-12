@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .providers.base import EndpointStatus, GatewayError, ModelEndpoint, ProviderKind, ProviderSpec
+from .prober import Prober
 from .providers.llamacpp import build_llamacpp_cmd
 from .providers.vllm import build_vllm_cmd
 from .providers.sglang import build_sglang_cmd
@@ -68,9 +69,11 @@ def _get_gpu_memory_mb() -> Dict[str, Any]:
 class ProviderManager:
     """Manages model endpoints: discovery, lifecycle, ports, VRAM eviction."""
 
-    def __init__(self, config_path: str, config_mgr=None):
+    def __init__(self, config_path: str, config_mgr=None, prober=None):
         self.config_path = config_path
         self.config_mgr = config_mgr
+        self.prober = prober if prober is not None else Prober()
+        self._external_ports: set = set()
         self._lock = threading.RLock()
         self._endpoints: Dict[str, ModelEndpoint] = {}
         self._config: Dict[str, Any] = dict(DEFAULT_CONFIG)
@@ -136,6 +139,82 @@ class ProviderManager:
     def get_routing(self) -> Dict[str, list]:
         return self._config.get("routing", {})
 
+    def probe_and_merge(self, prober=None) -> dict:
+        """Probe locally-running servers and merge them into the provider config.
+
+        New servers are added (marked auto_discovered), existing entries have
+        host/port/model refreshed (manual params preserved), and disappeared
+        auto_discovered entries are removed — enabling hot-plug / hot-unplug.
+        """
+        p = prober if prober is not None else self.prober
+        discovered = p.scan() if p is not None else []
+        providers = dict(self._config.get("providers", {}))
+        external_ports = set()
+        added: list = []
+        updated: list = []
+        removed: list = []
+        for d in discovered:
+            external_ports.add(d.port)
+            if d.name in providers:
+                entry = dict(providers[d.name])
+                entry["host"] = d.host
+                entry["port"] = d.port
+                entry["provider"] = d.provider.value
+                if d.model_path:
+                    entry["model_path"] = d.model_path
+                if d.model_name:
+                    entry["model_name"] = d.model_name
+                # Refresh launch params from the live cmdline so external
+                # servers show accurate config (e.g. ctx_size) on every poll.
+                entry["params"] = dict(d.params or {})
+                entry["auto_discovered"] = True
+                providers[d.name] = entry
+                updated.append(d.name)
+            else:
+                entry = {
+                    "provider": d.provider.value,
+                    "host": d.host,
+                    "port": d.port,
+                    "params": dict(d.params or {}),
+                    "auto_discovered": True,
+                }
+                if d.model_path:
+                    entry["model_path"] = d.model_path
+                if d.model_name:
+                    entry["model_name"] = d.model_name
+                providers[d.name] = entry
+                added.append(d.name)
+        # hot-unplug: drop auto_discovered entries no longer found
+        for name in list(providers.keys()):
+            if providers[name].get("auto_discovered") and name not in added and name not in updated:
+                providers.pop(name)
+                removed.append(name)
+        self._external_ports = external_ports
+        self._config["providers"] = providers
+        self._save_config()
+        self._discover()
+        # Auto-discovered servers run outside the gateway, so reflect their
+        # real live status: mark the endpoint RUNNING with the actual pid
+        # instead of the default STOPPED.
+        for d in discovered:
+            ep = self._endpoints.get(d.name)
+            if ep is not None:
+                ep.status = EndpointStatus.RUNNING
+                ep.pid = d.pid
+                ep.external = True
+        return {"added": added, "updated": updated, "removed": removed}
+
+    async def _probe_loop(self, interval: float = 30.0) -> None:
+        """Background hot-plug loop: periodically probe + merge discovered servers."""
+        import asyncio
+
+        while True:
+            try:
+                await asyncio.to_thread(self.probe_and_merge)
+            except Exception as e:
+                print(f"[ProviderManager] probe loop error: {e}", flush=True)
+            await asyncio.sleep(interval)
+
     # ── Discovery ───────────────────────────────────────────
     def _discover(self) -> None:
         providers = self._config.get("providers", {})
@@ -163,10 +242,17 @@ class ProviderManager:
                     # provider client and the API list endpoint).
                     existing.host = spec.host
                     existing.port = spec.port
+                    existing.external = data.get("auto_discovered", False)
                 else:
                     self._endpoints[name] = ModelEndpoint(
                         name=name, spec=spec, host=spec.host, port=spec.port,
+                        external=data.get("auto_discovered", False),
                     )
+            # Remove endpoints whose provider config no longer exists
+            # (e.g. auto-discovered servers that stopped) — hot-unplug.
+            for name in list(self._endpoints.keys()):
+                if name not in providers:
+                    self._endpoints.pop(name, None)
 
     def list_endpoints(self) -> List[ModelEndpoint]:
         with self._lock:
@@ -254,7 +340,8 @@ class ProviderManager:
 
     async def stop_all(self) -> None:
         for endpoint in list(self._endpoints.values()):
-            if endpoint.status == EndpointStatus.RUNNING:
+            # External servers are not owned by Life2Tea: leave them running.
+            if endpoint.status == EndpointStatus.RUNNING and not endpoint.external:
                 self._kill_process(endpoint)
                 endpoint.status = EndpointStatus.STOPPED
                 endpoint.pid = 0
@@ -295,6 +382,10 @@ class ProviderManager:
     def _kill_process(self, endpoint: ModelEndpoint) -> None:
         if not endpoint.pid:
             return
+        # External hot-plug servers are NOT spawned by Life2Tea, so they must
+        # survive Life2Tea's stop/restart. Never terminate them.
+        if getattr(endpoint, "external", False):
+            return
         try:
             os.kill(endpoint.pid, signal.SIGTERM)
             try:
@@ -312,6 +403,7 @@ class ProviderManager:
     def _allocate_port(self, endpoint: ModelEndpoint) -> None:
         lo, hi = self._config.get("default_port_range", [8080, 8099])
         used = {e.port for e in self._endpoints.values() if e.status == EndpointStatus.RUNNING}
+        used = used | self._external_ports
         for port in range(lo, hi + 1):
             if port not in used:
                 endpoint.port = port
@@ -335,7 +427,7 @@ class ProviderManager:
         with self._lock:
             running = [
                 e for e in self._endpoints.values()
-                if e.status == EndpointStatus.RUNNING
+                if e.status == EndpointStatus.RUNNING and not e.external
             ]
             if not running:
                 return None

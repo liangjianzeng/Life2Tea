@@ -187,8 +187,9 @@ async def _non_stream_chat(gateway: Gateway, chain, messages, params) -> Any:
         endpoint.touch()
         provider = Provider(endpoint)
         try:
+            _t0 = time.perf_counter()
             result = await provider.chat_completion(messages, stream=False, **params)
-            _record_usage(gateway, endpoint, result)
+            _record_usage(gateway, endpoint, result, latency_seconds=time.perf_counter() - _t0)
             return JSONResponse(content=_openai_shape(result, endpoint.name))
         except GatewayError as e:
             last_error = e
@@ -271,8 +272,9 @@ async def completions(req: CompletionRequest, request: Request):
         endpoint.touch()
         provider = Provider(endpoint)
         try:
+            _t0 = time.perf_counter()
             result = await provider.completion(req.prompt, stream=False, **params)
-            _record_usage(gateway, endpoint, result)
+            _record_usage(gateway, endpoint, result, latency_seconds=time.perf_counter() - _t0)
             return JSONResponse(content=_openai_shape(result, endpoint.name))
         except GatewayError as e:
             last_error = e
@@ -293,18 +295,23 @@ def _openai_shape(result: Dict[str, Any], model: str) -> Dict[str, Any]:
     return out
 
 
-def _record_usage(gateway: Gateway, endpoint, result: Dict[str, Any]) -> None:
+def _record_usage(gateway: Gateway, endpoint, result: Dict[str, Any], latency_seconds: float = 0.0) -> None:
     if not gateway.on_usage:
         return
     usage = result.get("usage") or {}
+    completion = usage.get("completion_tokens", 0)
+    latency_ms = round(latency_seconds * 1000, 2) if latency_seconds > 0 else 0.0
+    tps = round(completion / latency_seconds, 2) if latency_seconds > 0 and completion else 0.0
     try:
         gateway.on_usage(
             endpoint.name,
             {
                 "prompt_tokens": usage.get("prompt_tokens", 0),
-                "completion_tokens": usage.get("completion_tokens", 0),
+                "completion_tokens": completion,
                 "total_tokens": usage.get("total_tokens", 0),
                 "model": endpoint.name,
+                "latency_ms": latency_ms,
+                "tps": tps,
             },
         )
     except Exception:

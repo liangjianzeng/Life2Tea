@@ -182,6 +182,7 @@ export default {
     disable: "禁用",
     enable: "启用",
     disabledTag: "已禁用",
+    autoDiscovered: "自动发现",
     delete: "删除",
     confirmDelete: "确定要删除模型 {name} 吗？",
     errorDelete: "删除模型失败：{msg}",

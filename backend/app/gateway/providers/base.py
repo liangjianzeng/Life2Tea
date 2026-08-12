@@ -128,6 +128,7 @@ class ModelEndpoint:
     last_used: float = field(default_factory=time.time)
     request_count: int = 0
     load_time: float = 0.0
+    external: bool = False  # True = hot-plugged external server, not spawned here
 
     def touch(self) -> None:
         self.last_used = time.time()
@@ -145,6 +146,7 @@ class ModelEndpoint:
             "request_count": self.request_count,
             "model_path": self.spec.model_path,
             "model_name": self.spec.model_name,
+            "external": self.external,
         }
 
 

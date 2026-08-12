@@ -127,6 +127,51 @@ def _detect_spec(cmd) -> dict:
     }
 
 
+def _memory_breakdown() -> Dict[str, Any]:
+    """Accurate memory numbers read straight from /proc/meminfo.
+
+    On the DGX Spark (GB10, aarch64) the installed psutil build reports
+    virtual_memory().used as (total - available) -- i.e. it counts reclaimable
+    cache as "used" -- and .percent as 0.0. So we never trust those fields and
+    compute committed memory ourselves:
+        committed = MemTotal - MemFree - (Buffers + Cached + SReclaimable)
+    where the subtracted part is all reclaimable and therefore NOT real usage.
+    """
+    cached_kb = 0
+    total = free = available = 0
+    try:
+        with open("/proc/meminfo") as _f:
+            for _ln in _f:
+                _p = _ln.split(":")
+                if len(_p) != 2:
+                    continue
+                _k = _p[0].strip()
+                try:
+                    _v = int(_p[1].strip().split()[0])
+                except (ValueError, IndexError):
+                    continue
+                if _k == "MemTotal":
+                    total = _v * 1024
+                elif _k == "MemFree":
+                    free = _v * 1024
+                elif _k == "MemAvailable":
+                    available = _v * 1024
+                elif _k in ("Buffers", "Cached", "SReclaimable"):
+                    cached_kb += _v
+    except Exception:
+        pass
+    _cached = cached_kb * 1024
+    _committed = max(0, total - free - _cached)
+    _percent = (_committed / total * 100) if total else 0.0
+    return {
+        "total": total,
+        "available": available if available else (total - _committed),
+        "cached": _cached,
+        "used": _committed,
+        "percent": _percent,
+    }
+
+
 class StatsService:
     """System statistics service"""
 
@@ -176,12 +221,18 @@ class StatsService:
                 net_rate_recv = (net.bytes_recv - self._last_net_io["bytes_recv"]) / elapsed_net
         self._last_net_io = {"time": now_net, "bytes_sent": net.bytes_sent, "bytes_recv": net.bytes_recv}
 
+        # Accurate memory breakdown (GB10 unified-memory aware). Computed from
+        # /proc/meminfo directly because the installed psutil build reports a
+        # wrong .used (counts reclaimable cache) and .percent (=0.0).
+        _mb = _memory_breakdown()
         metrics = {
             "cpu": psutil.cpu_percent(interval=0.1),
             "memory": {
-                "total": vmem.total,
-                "used": vmem.used,
-                "percent": vmem.percent,
+                "total": _mb["total"],
+                "used": _mb["used"],
+                "available": _mb["available"],
+                "percent": _mb["percent"],
+                "cached": _mb["cached"],
             },
             "disk": {
                 "total": psutil.disk_usage('/').total,
@@ -671,6 +722,188 @@ class StatsService:
             return {"period": time_range, "data": {"total_input_tokens": 0, "total_output_tokens": 0, "by_model": {}}}
         finally:
             conn.close()
+
+
+    # ── Gateway unified statistics (per-model usage / requests / series) ──
+    def _period_range(self, period: str) -> tuple:
+        """Return (start_iso, end_iso) for a natural/rolling period.
+
+        day  = natural day (00:00 → now)
+        week = natural week (Monday 00:00 → now)
+        month = natural month (1st 00:00 → now)
+        all  = no lower bound
+        """
+        now = datetime.now()
+        end = now
+        p = period.lower()
+        if p == "day":
+            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif p == "week":
+            start = now - timedelta(days=now.weekday())
+            start = start.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif p == "month":
+            start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        elif p in ("all", ""):
+            return ("", end.isoformat())
+        else:
+            start = now - timedelta(days=1)
+        return (start.isoformat(), end.isoformat())
+
+    def get_gateway_summary(self, period: str = "month") -> Dict[str, Any]:
+        """Per-model request count + input/output tokens for a period."""
+        start_str, end_str = self._period_range(period)
+        conn = self.db.get_connection()
+        try:
+            where = ""
+            params: list = []
+            if start_str:
+                where = " WHERE timestamp >= ?"
+                params.append(start_str)
+            query = f"""
+                SELECT model_family AS model,
+                       COUNT(*) AS requests,
+                       COALESCE(SUM(input_tokens),0) AS input_tokens,
+                       COALESCE(SUM(output_tokens),0) AS output_tokens,
+                       COALESCE(SUM(input_tokens+output_tokens),0) AS total_tokens,
+                       COALESCE(AVG(latency_ms),0) AS avg_latency_ms,
+                       COALESCE(AVG(tps),0) AS avg_tps
+                FROM token_usage{where}
+                GROUP BY model_family
+                ORDER BY requests DESC
+            """
+            rows = conn.execute(query, params).fetchall()
+            by_model = []
+            for r in rows:
+                by_model.append({
+                    "model": r[0],
+                    "requests": r[1],
+                    "input_tokens": r[2],
+                    "output_tokens": r[3],
+                    "total_tokens": r[4],
+                    "avg_latency_ms": round(r[5], 2) if r[5] else 0,
+                    "avg_tps": round(r[6], 2) if r[6] else 0,
+                })
+            totals = {
+                "requests": sum(m["requests"] for m in by_model),
+                "input_tokens": sum(m["input_tokens"] for m in by_model),
+                "output_tokens": sum(m["output_tokens"] for m in by_model),
+                "total_tokens": sum(m["total_tokens"] for m in by_model),
+            }
+            return {"period": period, "by_model": by_model, "totals": totals}
+        except Exception as e:
+            print(f"Error getting gateway summary: {e}", flush=True)
+            return {"period": period, "by_model": [], "totals": {}}
+        finally:
+            conn.close()
+
+    def get_gateway_series(self, period: str = "month", granularity: str = "day") -> Dict[str, Any]:
+        """Time-series buckets of requests/tokens, empty buckets padded with 0."""
+        start_str, end_str = self._period_range(period)
+        granularity = granularity.lower()
+        if granularity == "hour":
+            sql_fmt = "strftime('%Y-%m-%d %H:00', timestamp)"
+        elif granularity == "day":
+            sql_fmt = "strftime('%Y-%m-%d', timestamp)"
+        else:
+            sql_fmt = "strftime('%Y-%m', timestamp)"
+        conn = self.db.get_connection()
+        try:
+            where = ""
+            params: list = []
+            if start_str:
+                where = " WHERE timestamp >= ?"
+                params.append(start_str)
+            query = f"""
+                SELECT {sql_fmt} AS bucket,
+                       COUNT(*) AS requests,
+                       COALESCE(SUM(input_tokens),0) AS input_tokens,
+                       COALESCE(SUM(output_tokens),0) AS output_tokens
+                FROM token_usage{where}
+                GROUP BY bucket
+                ORDER BY bucket
+            """
+            rows = conn.execute(query, params).fetchall()
+            return {
+                "period": period,
+                "granularity": granularity,
+                "series": [
+                    {"bucket": r[0], "requests": r[1], "input_tokens": r[2], "output_tokens": r[3]}
+                    for r in rows
+                ],
+            }
+        except Exception as e:
+            print(f"Error getting gateway series: {e}", flush=True)
+            return {"period": period, "granularity": granularity, "series": []}
+        finally:
+            conn.close()
+
+    def get_gateway_period_compare(self) -> Dict[str, Any]:
+        """Compare current month vs previous month and current week vs previous week."""
+        now = datetime.now()
+
+        def _agg(start_iso: str, end_iso: str = None) -> dict:
+            conn = self.db.get_connection()
+            try:
+                if end_iso:
+                    row = conn.execute(
+                        """SELECT COUNT(*), COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0)
+                           FROM token_usage WHERE timestamp >= ? AND timestamp < ?""",
+                        (start_iso, end_iso),
+                    ).fetchone()
+                elif start_iso:
+                    row = conn.execute(
+                        """SELECT COUNT(*), COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0)
+                           FROM token_usage WHERE timestamp >= ?""",
+                        (start_iso,),
+                    ).fetchone()
+                else:
+                    row = conn.execute(
+                        """SELECT COUNT(*), COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0)
+                           FROM token_usage""",
+                    ).fetchone()
+                return {"requests": row[0] or 0, "input_tokens": row[1] or 0, "output_tokens": row[2] or 0}
+            except Exception as e:
+                print(f"period compare agg error: {e}", flush=True)
+                return {"requests": 0, "input_tokens": 0, "output_tokens": 0}
+            finally:
+                conn.close()
+
+        def _pct(cur, prev):
+            if prev == 0:
+                return 100.0 if cur > 0 else 0.0
+            return round((cur - prev) / prev * 100, 1)
+
+        def _diff(cur, prev, key):
+            return {"current": cur[key], "previous": prev[key], "delta_pct": _pct(cur[key], prev[key])}
+
+        # month
+        cur_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        if cur_month_start.month == 1:
+            prev_month_start = cur_month_start.replace(year=cur_month_start.year - 1, month=12, day=1)
+        else:
+            prev_month_start = cur_month_start.replace(month=cur_month_start.month - 1, day=1)
+        cur_month = _agg(cur_month_start.isoformat())
+        prev_month = _agg(prev_month_start.isoformat(), cur_month_start.isoformat())
+
+        # week
+        cur_week_start = now - timedelta(days=now.weekday())
+        cur_week_start = cur_week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+        prev_week_start = cur_week_start - timedelta(days=7)
+        cur_week = _agg(cur_week_start.isoformat())
+        prev_week = _agg(prev_week_start.isoformat(), cur_week_start.isoformat())
+
+        return {
+            "month": {
+                "requests": _diff(cur_month, prev_month, "requests"),
+                "input_tokens": _diff(cur_month, prev_month, "input_tokens"),
+                "output_tokens": _diff(cur_month, prev_month, "output_tokens"),
+            },
+            "week": {
+                "requests": _diff(cur_week, prev_week, "requests"),
+                "input_tokens": _diff(cur_week, prev_week, "input_tokens"),
+                "output_tokens": _diff(cur_week, prev_week, "output_tokens"),
+            },
+        }
 
     # ── Live llama.cpp server metrics (process discovery) ──
     _MODEL_METRICS_PREV = {}
@@ -1182,7 +1415,7 @@ class StatsService:
         except Exception:
             gpu = None
 
-        vmem = psutil.virtual_memory()
+        _mb = _memory_breakdown()
 
         return {
             "data": {
@@ -1190,9 +1423,11 @@ class StatsService:
                 "discovered_count": len(servers),
                 "gpu": gpu,
                 "system_memory": {
-                    "used": vmem.used,
-                    "total": vmem.total,
-                    "percent": vmem.percent,
+                    "used": _mb["used"],
+                    "total": _mb["total"],
+                    "percent": _mb["percent"],
+                    "available": _mb["available"],
+                    "cached": _mb["cached"],
                 },
                 "servers": servers,
             }
@@ -1217,6 +1452,17 @@ class StatsService:
             conn.execute("ALTER TABLE system_metrics ADD COLUMN disk_io_write_rate REAL DEFAULT 0")
         except sqlite3.OperationalError:
             pass  # column already exists
+
+    def _ensure_token_usage_columns(self, conn):
+        """Add latency/tps columns to token_usage if missing (DB migration)."""
+        try:
+            conn.execute("ALTER TABLE token_usage ADD COLUMN latency_ms REAL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+        try:
+            conn.execute("ALTER TABLE token_usage ADD COLUMN tps REAL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
 
     # ── Internal helpers ────────────────────────────────
 

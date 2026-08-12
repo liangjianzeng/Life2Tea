@@ -82,9 +82,12 @@ def _get_manager(request: Request):
 def _to_model_dict(endpoint, manager=None) -> Dict:
     spec = endpoint.spec
     disabled = False
+    auto_discovered = False
     if manager is not None:
         providers = manager.get_config().get("providers", {})
-        disabled = bool(providers.get(endpoint.name, {}).get("disabled", False))
+        entry = providers.get(endpoint.name, {})
+        disabled = bool(entry.get("disabled", False))
+        auto_discovered = bool(entry.get("auto_discovered", False))
     return {
         "family": endpoint.name,
         "display": endpoint.name,
@@ -97,6 +100,7 @@ def _to_model_dict(endpoint, manager=None) -> Dict:
         "pid": endpoint.pid,
         "params": spec.params,
         "disabled": disabled,
+        "auto_discovered": auto_discovered,
         "instance": endpoint.to_dict(),
     }
 
@@ -108,12 +112,12 @@ async def list_models(request: Request, _auth: None = auth_dep):
     return {"models": models}
 
 
-@router.post("/scan", summary="Re-read provider config / rediscover endpoints")
+@router.post("/scan", summary="Re-read config + auto-discover running servers")
 async def scan_models(request: Request, _auth: None = auth_dep):
     manager = _get_manager(request)
-    manager.update_providers(manager.get_config().get("providers", {}))
+    report = manager.probe_and_merge()
     models = [_to_model_dict(e, manager) for e in manager.list_endpoints()]
-    return {"models": models}
+    return {"models": models, "discovered": report}
 
 
 @router.get("/backends", summary="List available provider kinds and field schemas")

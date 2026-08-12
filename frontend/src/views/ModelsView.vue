@@ -16,6 +16,7 @@
           <strong class="model-name">{{ m.display }}</strong>
           <span class="model-meta">{{ m.provider }} · :{{ m.port }}</span>
           <div class="status-row">
+            <span v-if="m.auto_discovered" class="model-auto">{{ t("models.autoDiscovered") }}</span>
             <span v-if="m.disabled" class="model-disabled">{{ t("models.disabledTag") }}</span>
             <span v-if="m.status === 'running'" class="model-status running">
               {{ t("models.running", { port: m.port }) }}
@@ -487,6 +488,14 @@ onMounted(() => {
   border-radius: 4px;
   background: #555;
   color: #aaa;
+  display: inline-block;
+}
+.model-auto {
+  font-size: 0.75em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #2d4a3a;
+  color: #4caf50;
   display: inline-block;
 }
 .model-actions {

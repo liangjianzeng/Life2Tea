@@ -190,12 +190,17 @@ async def lifespan(app: FastAPI):
         def _on_usage(model_name: str, usage: dict):
             prompt = usage.get("prompt_tokens", 0)
             completion = usage.get("completion_tokens", 0)
+            latency_ms = usage.get("latency_ms", 0.0)
+            tps = usage.get("tps", 0.0)
+            elapsed_s = latency_ms / 1000.0 if latency_ms > 0 else 0.0
             try:
                 _stats.record_token_usage(
                     model_family=model_name,
                     model_name=model_name,
                     input_tokens=prompt,
                     output_tokens=completion,
+                    latency_ms=latency_ms,
+                    tps=tps,
                 )
             except Exception:
                 pass
@@ -205,8 +210,8 @@ async def lifespan(app: FastAPI):
                         plugin_name=model_name,
                         tokens_generated=completion,
                         prompt_tokens=prompt,
-                        elapsed_seconds=0.0,
-                        tokens_per_second=0.0,
+                        elapsed_seconds=elapsed_s,
+                        tokens_per_second=tps,
                         backend="gateway",
                     )
                 )
@@ -214,6 +219,29 @@ async def lifespan(app: FastAPI):
                 pass
 
         app.state.gateway.on_usage = _on_usage
+
+        # ── Auto-discovery: hot-plug running model servers ──
+        import asyncio
+
+        app.state.probe_task = asyncio.create_task(
+            app.state.provider_manager._probe_loop(interval=30)
+        )
+
+        # ── Background system-metrics collection ──
+        # Snapshot every 60s regardless of request traffic so the resource
+        # history chart stays continuous even while idle.
+        async def _system_metrics_loop():
+            import asyncio as _aio
+            while True:
+                try:
+                    await _aio.to_thread(
+                        _stats.record_system_metrics, _stats.collect_system_metrics()
+                    )
+                except Exception:
+                    pass
+                await _aio.sleep(60)
+
+        app.state.metrics_task = asyncio.create_task(_system_metrics_loop())
     except Exception as e:
         print(f"[LIFECYCLE] Error during initialization: {e}", flush=True)
         raise
@@ -273,6 +301,19 @@ async def lifespan(app: FastAPI):
 
     # ── Shutdown ───────────────────────────────────────
     logger.info("system", "Life2Tea backend shutting down")
+    # ── Stop auto-discovery probe loop ──
+    if hasattr(app.state, "probe_task"):
+        try:
+            app.state.probe_task.cancel()
+        except Exception:
+            pass
+
+    if hasattr(app.state, "metrics_task"):
+        try:
+            app.state.metrics_task.cancel()
+        except Exception:
+            pass
+
     if hasattr(app.state, "provider_manager"):
         import asyncio
 

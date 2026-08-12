@@ -183,6 +183,7 @@ export default {
     disable: "Disable",
     enable: "Enable",
     disabledTag: "Disabled",
+    autoDiscovered: "Auto-discovered",
     delete: "Delete",
     confirmDelete: "Delete model {name}?",
     errorDelete: "Failed to delete model: {msg}",

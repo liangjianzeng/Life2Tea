@@ -46,6 +46,7 @@ export interface ModelEndpoint {
   status: EndpointStatus;
   pid: number;
   disabled?: boolean;
+  auto_discovered?: boolean;
   params: Record<string, unknown>;
   instance?: {
     name: string;
