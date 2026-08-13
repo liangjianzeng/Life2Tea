@@ -112,6 +112,7 @@ class ProviderSpec:
     # Optional explicit launch command override (overrides kind-specific builder)
     launch_cmd: List[str] = field(default_factory=list)
     params: Dict[str, Any] = field(default_factory=dict)
+    aliases: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -146,6 +147,7 @@ class ModelEndpoint:
             "request_count": self.request_count,
             "model_path": self.spec.model_path,
             "model_name": self.spec.model_name,
+            "aliases": list(getattr(self.spec, "aliases", []) or []),
             "external": self.external,
         }
 

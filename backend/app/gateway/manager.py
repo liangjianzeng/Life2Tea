@@ -234,6 +234,7 @@ class ProviderManager:
                     model_name=data.get("model_name", ""),
                     launch_cmd=data.get("launch_cmd", []),
                     params=data.get("params", {}),
+                    aliases=data.get("aliases", []),
                 )
                 existing = self._endpoints.get(name)
                 if existing:
@@ -260,7 +261,16 @@ class ProviderManager:
 
     def get_endpoint(self, name: str) -> Optional[ModelEndpoint]:
         with self._lock:
-            return self._endpoints.get(name)
+            endpoint = self._endpoints.get(name)
+            if endpoint is not None:
+                return endpoint
+            # Alias resolution: a short alias (e.g. "vv4flash") maps to the
+            # canonical endpoint name via ProviderSpec.aliases.
+            for e in self._endpoints.values():
+                aliases = getattr(e.spec, "aliases", []) or []
+                if name in aliases:
+                    return e
+            return None
 
     # ── Launch command ──────────────────────────────────────
     def _build_cmd(self, spec: ProviderSpec) -> List[str]:

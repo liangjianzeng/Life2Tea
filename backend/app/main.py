@@ -285,6 +285,8 @@ async def lifespan(app: FastAPI):
     app.include_router(stats_router.router)
     app.include_router(model_router_router, prefix="/api/model-router", tags=["ModelRouter"])
     app.include_router(gateway_router)
+    from app.gateway.vision import vision_router
+    app.include_router(vision_router)
     print("[LIFECYCLE] Routers registered, total routes:", len(app.routes), flush=True)
     # Print all routes that have a path attribute
     for r in app.routes:

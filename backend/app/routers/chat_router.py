@@ -19,7 +19,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 
 from ..gateway.providers.base import EndpointStatus, GatewayError, Provider
 
@@ -29,7 +29,7 @@ router = APIRouter()
 
 class ChatMessage(BaseModel):
     role: str
-    content: str
+    content: Union[str, List[Dict[str, Any]]]
 
 
 class ChatCompletionBody(BaseModel):
@@ -101,8 +101,9 @@ async def chat_completions(body: ChatCompletionBody, request: Request):
     if body.stop:
         params["stop"] = body.stop
 
-    # Build fallback chain via the gateway router
-    chain = gateway.router.route_chain(messages=messages, model_preference=body.model)
+    # Build fallback chain via the gateway router (describe-then-reason)
+    from ..gateway.vision import prepare_chat
+    chain, messages = await prepare_chat(gateway, messages, body.model)
 
     if body.stream:
         return StreamingResponse(

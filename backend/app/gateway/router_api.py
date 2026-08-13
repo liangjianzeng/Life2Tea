@@ -8,7 +8,7 @@ routing, fallback chains, unified SSE streaming, and optional usage telemetry.
 
 import json
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -21,7 +21,7 @@ from .manager import ProviderManager
 
 class ChatMessage(BaseModel):
     role: str
-    content: str
+    content: Union[str, List[Dict[str, Any]]]
 
 
 class ChatCompletionRequest(BaseModel):
@@ -163,7 +163,8 @@ async def unload_model(model_name: str, request: Request):
 async def chat_completions(req: ChatCompletionRequest, request: Request):
     gateway = get_gateway()
     messages = [m.dict() for m in req.messages]
-    chain = gateway.router.route_chain(messages, req.model)
+    from .vision import prepare_chat
+    chain, messages = await prepare_chat(gateway, messages, req.model)
 
     params = {
         "max_tokens": req.max_tokens,

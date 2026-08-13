@@ -184,6 +184,7 @@ class Prober:
         "--ctx-size": ("ctx_size", False), "-c": ("ctx_size", False),
         "--n-gpu-layers": ("n_gpu_layers", False), "--gpu-layers": ("n_gpu_layers", False),
         "-ngl": ("n_gpu_layers", False),
+        "--mmproj": ("mmproj", False),
         "--threads": ("threads", False), "-t": ("threads", False),
         "--batch-size": ("batch_size", False), "--ubatch-size": ("ubatch_size", False),
         "--parallel": ("parallel", False),
