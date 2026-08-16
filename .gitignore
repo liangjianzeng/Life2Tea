@@ -33,6 +33,8 @@ log/
 config/life2tea.json
 config/gateway.json
 config/plugin_*.json
+# SQLite database is runtime data — do not track
+config/life2tea.db
 config/profiles/
 models/
 backends/
