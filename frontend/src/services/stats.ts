@@ -91,3 +91,13 @@ export async function getModelMetrics() {
   if (!res.ok) throw new Error(`Model metrics: ${res.status}`);
   return res.json();
 }
+
+/**
+ * Fetch per-model usage summary (requests / tokens / tps) for a period.
+ * @param period - "day", "week", "month", "all"
+ */
+export async function getGatewaySummary(period: string = "month") {
+  const res = await fetch(`${API_BASE}/stats/gateway/summary?period=${period}`, { credentials: "include" });
+  if (!res.ok) throw new Error(`Gateway summary: ${res.status}`);
+  return res.json();
+}

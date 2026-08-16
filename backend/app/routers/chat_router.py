@@ -116,8 +116,10 @@ async def chat_completions(body: ChatCompletionBody, request: Request):
         endpoint.touch()
         provider = Provider(endpoint)
         try:
+            _t0 = time.perf_counter()
             result = await provider.chat_completion(messages, stream=False, **params)
             _log_generation(request, messages, body, result)
+            _record_token_usage(request, endpoint.name, result.get("usage") or {}, time.perf_counter() - _t0)
             return result
         except GatewayError as e:
             last_error = e
@@ -126,21 +128,39 @@ async def chat_completions(body: ChatCompletionBody, request: Request):
 
 
 async def _stream_gen(request, gateway, chain, messages, params):
+    import json
     last_error = None
     for endpoint in chain:
         endpoint.touch()
         provider = Provider(endpoint)
+        _t0 = time.perf_counter()
+        usage = {}
+        completion_approx = 0
         try:
             async for chunk in provider.chat_completion_stream(messages, **params):
                 yield chunk
+                try:
+                    if chunk.startswith("data: "):
+                        payload = json.loads(chunk[6:].strip())
+                        if payload.get("usage"):
+                            usage = payload["usage"]
+                        else:
+                            for c in (payload.get("choices") or []):
+                                delta = c.get("delta") or {}
+                                if delta.get("content") or delta.get("reasoning_content"):
+                                    completion_approx += 1
+                except Exception:
+                    pass
             yield "data: [DONE]\n\n"
             _log_generation(request, messages, None, None)
+            if not usage and completion_approx:
+                usage = {"completion_tokens": completion_approx}
+            _record_token_usage(request, endpoint.name, usage, time.perf_counter() - _t0)
             return
         except GatewayError as e:
             last_error = e
             continue
     err = last_error
-    import json
     yield f"data: {json.dumps({'error': {'message': err.message if err else 'No model available', 'type': err.error_type if err else 'unavailable'}})}\n\n"
     yield "data: [DONE]\n\n"
 
@@ -177,6 +197,29 @@ def _log_generation(request, messages, body, result):
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
             )
+    except Exception:
+        pass
+
+
+def _record_token_usage(request, model_name: str, usage: dict, latency_seconds: float = 0.0):
+    """Persist real per-request token usage into token_usage (per-model stats)."""
+    try:
+        stats_service = getattr(request.app.state, "stats_service", None)
+        if stats_service is None:
+            return
+        usage = usage or {}
+        prompt = usage.get("prompt_tokens", 0)
+        completion = usage.get("completion_tokens", 0)
+        latency_ms = round(latency_seconds * 1000, 2) if latency_seconds > 0 else 0.0
+        tps = round(completion / latency_seconds, 2) if latency_seconds > 0 and completion else 0.0
+        stats_service.record_token_usage(
+            model_family=model_name,
+            model_name=model_name,
+            input_tokens=prompt,
+            output_tokens=completion,
+            latency_ms=latency_ms,
+            tps=tps,
+        )
     except Exception:
         pass
 

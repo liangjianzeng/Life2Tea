@@ -289,17 +289,21 @@ class StatsService:
 
     def record_token_usage(self, model_family: str, model_name: str,
                            input_tokens: int, output_tokens: int,
-                           timestamp: str = None, key_id: int = None) -> int:
+                           timestamp: str = None, key_id: int = None,
+                           latency_ms: float = 0.0, tps: float = 0.0) -> int:
         """Persist real per-request token usage into token_usage."""
         if timestamp is None:
             timestamp = self._now_iso()
         conn = self.db.get_connection()
         try:
+            self._ensure_token_usage_columns(conn)
             cursor = conn.execute(
                 """INSERT INTO token_usage
-                   (key_id, model_family, model_name, input_tokens, output_tokens, timestamp)
-                   VALUES (?,?,?,?,?,?)""",
-                (key_id, model_family, model_name, input_tokens, output_tokens, timestamp),
+                   (key_id, model_family, model_name, input_tokens, output_tokens,
+                    timestamp, latency_ms, tps)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (key_id, model_family, model_name, input_tokens, output_tokens,
+                 timestamp, latency_ms, tps),
             )
             conn.commit()
             return cursor.lastrowid

@@ -102,3 +102,30 @@ async def get_api_key_detail(
 ):
     """Get detailed request history for an API key"""
     return stats_service.get_api_key_detail(key_id, limit)
+
+
+@router.get("/api/stats/gateway/summary")
+async def get_gateway_usage_summary(
+    period: str = Query("month", description="day, week, month, all"),
+    stats_service: StatsService = Depends(get_stats_service)
+):
+    """Per-model request / token / tps summary for a period (day, week, month)."""
+    return stats_service.get_gateway_summary(period)
+
+
+@router.get("/api/stats/gateway/series")
+async def get_gateway_usage_series(
+    period: str = Query("month", description="day, week, month, all"),
+    granularity: str = Query("day", description="hour, day, month"),
+    stats_service: StatsService = Depends(get_stats_service)
+):
+    """Time-series buckets of requests / tokens."""
+    return stats_service.get_gateway_series(period, granularity)
+
+
+@router.get("/api/stats/gateway/compare")
+async def get_gateway_usage_compare(
+    stats_service: StatsService = Depends(get_stats_service)
+):
+    """Compare current vs previous month / week."""
+    return stats_service.get_gateway_period_compare()

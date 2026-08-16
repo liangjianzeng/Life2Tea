@@ -235,6 +235,48 @@
     </div>
 
 
+        <!-- 模型日/周/月用量统计 -->
+    <div class="chart-panel full-width">
+      <div class="chart-header">
+        <h3>模型用量统计 · 按日 / 周 / 月</h3>
+        <div class="chart-tabs">
+          <button v-for="p in usagePeriods" :key="p"
+                  :class="['tab-btn', { active: usagePeriod === p }]"
+                  @click="usagePeriod = p; refreshModelUsage(p)">
+            {{ p === 'day' ? '日' : p === 'week' ? '周' : '月' }}
+          </button>
+        </div>
+      </div>
+      <div class="chart-body">
+        <div v-if="modelUsageByModel.length === 0" class="empty-logs">暂无数据（尚无记录用量的请求）</div>
+        <table v-else class="usage-table">
+          <thead>
+            <tr>
+              <th>模型</th>
+              <th>请求数</th>
+              <th>输入 token</th>
+              <th>输出 token</th>
+              <th>总 token</th>
+              <th>平均延迟</th>
+              <th>平均 tps</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="m in modelUsageByModel" :key="m.model">
+              <td class="mc-model" :title="m.model">{{ shortModel(m.model) }}</td>
+              <td>{{ m.requests }}</td>
+              <td>{{ m.input_tokens.toLocaleString() }}</td>
+              <td>{{ m.output_tokens.toLocaleString() }}</td>
+              <td>{{ m.total_tokens.toLocaleString() }}</td>
+              <td>{{ m.avg_latency_ms ? m.avg_latency_ms.toFixed(1) + ' ms' : '—' }}</td>
+              <td>{{ m.avg_tps ? m.avg_tps.toFixed(1) : '—' }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+
         <!-- 延迟分布 -->
     <div class="chart-panel">
       <div class="chart-header">
@@ -273,7 +315,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from "vue";
 import { useI18n } from "vue-i18n";
-import { getStatsDashboard, getSystemMetrics, getApiKeyStats, getPerformanceMetrics, getResourceUsage, getRecentLogs, getModelMetrics } from "../services/stats";
+import { getStatsDashboard, getSystemMetrics, getApiKeyStats, getPerformanceMetrics, getResourceUsage, getRecentLogs, getModelMetrics, getGatewaySummary } from "../services/stats";
 import LineChart from "../components/LineChart.vue";
 
 const { t } = useI18n();
@@ -301,6 +343,11 @@ const recentLogs = ref<any[]>([]);
 
 const modelServers = ref<any[]>([]);
 const modelSummary = ref<any>(null);
+
+const usagePeriod = ref("day");
+const usagePeriods = ["day", "week", "month"];
+const modelUsageByModel = ref<any[]>([]);
+const modelUsageTotals = ref<any>({});
 
 const loading = ref(false);
 const activeResourceTab = ref("1h");
@@ -408,6 +455,22 @@ async function refreshDashboard() {
   }
 }
 
+function shortModel(name: string): string {
+  if (!name) return "—";
+  const cleaned = name.replace(/[-_].*$/i, "");
+  return cleaned.length > 40 ? cleaned.slice(0, 40) : cleaned;
+}
+
+async function refreshModelUsage(period: string) {
+  try {
+    const res = await getGatewaySummary(period);
+    modelUsageByModel.value = res.by_model || [];
+    modelUsageTotals.value = res.totals || {};
+  } catch (e) {
+    console.error("Failed to refresh model usage:", e);
+  }
+}
+
 async function refreshMetrics() {
   try {
     const [sys, res, logs] = await Promise.all([
@@ -427,7 +490,7 @@ async function refreshMetrics() {
 async function refreshAll() {
   loading.value = true;
   try {
-    await Promise.all([refreshDashboard(), refreshMetrics()]);
+    await Promise.all([refreshDashboard(), refreshMetrics(), refreshModelUsage(usagePeriod.value)]);
   } finally {
     loading.value = false;
   }
@@ -1070,6 +1133,32 @@ onUnmounted(() => {
   background: #1a1a2e;
   border: 1px dashed #2d2d4a;
   border-radius: 12px;
+}
+
+.usage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85em;
+}
+.usage-table th,
+.usage-table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid #2d2d4a;
+}
+.usage-table th {
+  color: #8b8bb0;
+  font-weight: 600;
+}
+.usage-table .mc-model {
+  color: #e0e0ff;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.usage-table tr:hover td {
+  background: #1a1a2e;
 }
 
 </style>
