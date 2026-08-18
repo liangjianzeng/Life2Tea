@@ -1,0 +1,39 @@
+name: life2tea_phone
+description: "Life2Tea-Phone: 通过 VPN 远程只读监控 Life2Tea 服务器负载与模型运行状态的 Android 客户端。"
+publish_to: 'none'
+
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.7.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+  # REST 只读调用后端 stats 接口
+  http: ^1.2.0
+  # 连接配置（非机密）持久化
+  shared_preferences: ^2.5.3
+  # API Key 加密存储（Android Keystore）
+  flutter_secure_storage: ^10.3.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^5.0.0
+  flutter_launcher_icons: ^0.14.3
+
+flutter:
+  uses-material-design: true
+
+# 应用图标生成配置
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "icon/logo.png"
+  adaptive_icon_background: "#0f0f1a"
+  adaptive_icon_foreground: "icon/logo.png"
+  background_color_android: "#0f0f1a"
