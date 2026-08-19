@@ -31,6 +31,10 @@ class Life2TeaApi {
 
   Future<Map<String, dynamic>> systemMetrics() => _get('/api/stats/system');
 
+  /// 资源使用历史（CPU / 内存 / GPU / 磁盘 IO），range: 1h / 6h / 24h / 7d / 30d。
+  Future<Map<String, dynamic>> resourceUsage(String range) =>
+      _get('/api/stats/resources?range=$range');
+
   Future<Map<String, dynamic>> modelMetrics() => _get('/api/stats/model-metrics');
 
   Future<Map<String, dynamic>> gatewaySummary() =>

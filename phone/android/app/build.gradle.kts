@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
@@ -7,7 +9,7 @@ plugins {
 
 android {
     namespace = "com.life2tea.life2tea_phone"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 36
     // 插件要求 NDK 27（flutter_secure_storage / shared_preferences_android）
     ndkVersion = "27.0.12077973"
 
@@ -38,11 +40,24 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            val keyProps = Properties()
+            val keyPropsFile = rootProject.file("key.properties")
+            if (keyPropsFile.exists()) {
+                keyPropsFile.inputStream().use { keyProps.load(it) }
+            }
+            storeFile = file(keyProps.getProperty("storeFile"))
+            storePassword = keyProps.getProperty("storePassword")
+            keyAlias = keyProps.getProperty("keyAlias")
+            keyPassword = keyProps.getProperty("keyPassword")
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            // Signing with the release keystore (key.jks), same as DSH-Phone.
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 }

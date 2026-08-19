@@ -36,9 +36,21 @@ class Life2TeaPhoneApp extends StatelessWidget {
         ),
         cardColor: _surface,
         hintColor: _muted,
-        navigationBarTheme: const NavigationBarThemeData(
+        navigationBarTheme: NavigationBarThemeData(
           backgroundColor: _surface,
           indicatorColor: _accent,
+          height: 52,
+          labelTextStyle: WidgetStateProperty.all<TextStyle>(
+            const TextStyle(fontSize: 11, fontWeight: FontWeight.w500),
+          ),
+          iconTheme: WidgetStateProperty.resolveWith<IconThemeData>(
+            (states) => IconThemeData(
+              size: 20,
+              color: states.contains(WidgetState.selected)
+                  ? _text
+                  : _muted,
+            ),
+          ),
         ),
         dividerTheme: const DividerThemeData(color: Color(0xFF2D2D4A)),
       ),
@@ -47,7 +59,7 @@ class Life2TeaPhoneApp extends StatelessWidget {
   }
 }
 
-/// 底部导航壳：仪表盘 / 设置。
+/// 顶部导航壳：仪表盘 / 设置。
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key});
 
@@ -63,21 +75,36 @@ class _HomeShellState extends State<HomeShell> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: IndexedStack(index: _index, children: _pages),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
-        destinations: const [
-          NavigationDestination(
-            icon: Icon(Icons.speed),
-            label: '仪表盘',
-          ),
-          NavigationDestination(
-            icon: Icon(Icons.settings),
-            label: '设置',
+      appBar: AppBar(
+        toolbarHeight: 48,
+        titleSpacing: 12,
+        title: const Text('Life2Tea 监控',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: SegmentedButton<int>(
+              showSelectedIcon: false,
+              segments: const [
+                ButtonSegment(value: 0, icon: Icon(Icons.speed), label: Text('仪表盘')),
+                ButtonSegment(value: 1, icon: Icon(Icons.settings), label: Text('设置')),
+              ],
+              selected: {_index},
+              onSelectionChanged: (s) => setState(() => _index = s.first),
+              style: ButtonStyle(
+                visualDensity: VisualDensity.compact,
+                textStyle: WidgetStateProperty.all(
+                  const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
+                ),
+                padding: WidgetStateProperty.all(
+                  const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                ),
+              ),
+            ),
           ),
         ],
       ),
+      body: IndexedStack(index: _index, children: _pages),
     );
   }
 }

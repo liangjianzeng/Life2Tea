@@ -2,7 +2,7 @@
     <!-- 远程只读监控：需要 INTERNET，且后端为 http://（走 VPN 加密隧道） -->
     <uses-permission android:name="android.permission.INTERNET"/>
     <application
-        android:label="Life2Tea 监控"
+        android:label="Life2Tea"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true">
